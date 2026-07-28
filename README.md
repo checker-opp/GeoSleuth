@@ -1,13 +1,14 @@
-# geolocator — image → location OSINT tool
+# GeoSleuth — image → location OSINT tool
 
 Guess **where a photo was taken** from the image alone. Feed it a picture; it
 runs a layered pipeline of location signals and returns a best-guess location,
 a **confidence score**, and the **evidence trail** that produced it — never a
-bare guess.
+bare guess. *(The Python package and CLI are named `geolocator` / `geolocate`.)*
 
-> **Status:** all four phases are built and tested — EXIF → geocoding, OCR,
-> GeoCLIP ML estimation, and corroboration + best-effort lookups. See the
-> [Roadmap](#roadmap).
+> **Status:** working end to end — EXIF & geocoding, OCR, the **GeoCLIP** and
+> **GeoSeer** locators with a **StreetCLIP** cross-check, corroboration layers
+> (OSM · iNaturalist · solar/climate · street imagery), a **web UI**, and 64
+> offline tests. See [what it does](#what-it-does-today) and the [Roadmap](#roadmap).
 
 ---
 
@@ -207,6 +208,24 @@ python -m geolocator ./my_photos/ --json
 geolocate path/to/photo.jpg
 ```
 
+### Example output (image with GPS metadata)
+
+```
+  IMAGE → LOCATION  (geolocator v0.1.0)
+  photo.jpg
+
+  BEST GUESS
+    Place       Avenue Gustave Eiffel, 7th Arrondissement, Paris, 75007, France
+    Coordinates 48.858400, 2.294500
+    Map         https://www.openstreetmap.org/?mlat=48.8584&mlon=2.2945#map=16/48.8584/2.2945
+    Precision   exact coordinates
+    Confidence  ██████████   95%
+
+  EVIDENCE
+    [exif] GPS coordinates embedded in image metadata → Avenue Gustave Eiffel …
+          confidence 0.95 · exact
+```
+
 ### Customize the query (choose which signals run)
 
 ```bash
@@ -232,7 +251,7 @@ Every signal has a `--x` / `--no-x` flag (`--geoclip`, `--geoseer`, `--streetcli
 
 A local browser app to upload an image, paste API keys, tick exactly which
 signals to run, and **download the local models with a progress bar** (then tick
-them to use). It ships in the base install — no extra needed:
+them to use). It's part of the standard install:
 
 ```bash
 pip install -e .             # or: pip install .
@@ -254,24 +273,6 @@ python -m geolocator.webui   # → http://127.0.0.1:5000
 > **GeoCLIP and StreetCLIP are two separate downloads** — GeoCLIP ~1.7 GB (used by
 > default), StreetCLIP ~1.6 GB (opt-in). Each has its own button; they're never
 > fetched together.
-
-### Example (image with GPS metadata)
-
-```
-  IMAGE → LOCATION  (geolocator v0.1.0)
-  photo.jpg
-
-  BEST GUESS
-    Place       Avenue Gustave Eiffel, 7th Arrondissement, Paris, 75007, France
-    Coordinates 48.858400, 2.294500
-    Map         https://www.openstreetmap.org/?mlat=48.8584&mlon=2.2945#map=16/48.8584/2.2945
-    Precision   exact coordinates
-    Confidence  ██████████   95%
-
-  EVIDENCE
-    [exif] GPS coordinates embedded in image metadata → Avenue Gustave Eiffel …
-          confidence 0.95 · exact
-```
 
 ---
 
@@ -306,8 +307,8 @@ it is (`exact` / `city` / `region` / `country` / `unknown`).
 - **Model disagreement lowers trust too.** When the optional StreetCLIP second
   model contradicts GeoCLIP's country, confidence is cut and the guess is
   re-ranked or overridden toward the agreed country — the tool won't keep
-  presenting a confident-but-contradicted location (see the StreetCLIP note in
-  [Install](#3-external-binaries-recommended)).
+  presenting a confident-but-contradicted location (see the StreetCLIP note under
+  [Configuration](#configuration-environment-variables)).
 
 This transparency is deliberate — for OSINT work, the reasoning matters as much
 as the answer.
@@ -318,10 +319,11 @@ as the answer.
 
 - **With GPS metadata:** 95%+ correct — this is essentially solved.
 - **Without metadata:** genuinely hard. Most social-media images have EXIF
-  stripped, so results depend on visible text, landmarks, and (in later phases)
-  ML estimation. Expect **country/region** accuracy on good photos, not
-  pinpoint coordinates on arbitrary ones. The tool always reports its
-  confidence so a weak guess is never mistaken for a strong one.
+  stripped, so results depend on the ML/AI locators (GeoCLIP, GeoSeer), visible
+  text, and landmarks. Expect **country/region** accuracy on generic photos and
+  **city-level** on distinctive ones — not pinpoint coordinates on arbitrary
+  images. The tool always reports its confidence so a weak guess is never
+  mistaken for a strong one.
 
 ---
 
@@ -333,6 +335,7 @@ as the answer.
 | **2 — done** | ML geo-estimation via GeoCLIP (image → coordinates, local inference) | the real no-metadata workhorse; needs a few GB RAM, GPU ideal |
 | **3 — done** | Solar/timezone consistency (pysolar), climate-zone descriptor, OSM cross-ref (Overpass) | corroboration layer |
 | **4 — done** | Reverse-search pivots (Yandex/Lens/Bing/TinEye), street matching (Mapillary + keyless KartaView), license-plate region | best-effort; keyed APIs gated behind env vars |
+| **beyond — done** | GeoSeer AI locator + short-circuit, StreetCLIP cross-check & disagreement resolver, OCR→place-name lookup, iNaturalist biome, batch mode, config-driven queries, web UI | added on top of the phased plan |
 
 ### What's intentionally left for later / needs your input
 
@@ -382,7 +385,6 @@ a new signal means writing one function and slotting it in.
 ```
 geolocator/
   cli.py            CLI + report formatting + signal-selection flags
-  webui.py          local Flask web UI (keys + toggles + results)
   pipeline.py       stage orchestration + confidence aggregation
   models.py         Signal / GeoResult / AnalyzeConfig data structures
   # Phase 1 — reliable core
@@ -390,7 +392,7 @@ geolocator/
   geocode.py        Nominatim reverse + forward (place-name) geocoding
   ocr.py            Tesseract OCR (upscale/contrast/multi-PSM) + langdetect
   # Phase 2 — ML / AI locators
-  geoestimate.py    GeoCLIP image → coordinates (lazy, optional)
+  geoestimate.py    GeoCLIP image → coordinates (local model)
   geoseer.py        GeoSeer AI geolocation API (opt-in key, ~10/day free)
   secondmodel.py    StreetCLIP zero-shot country cross-check (opt-in)
   # Phase 3 — corroboration
