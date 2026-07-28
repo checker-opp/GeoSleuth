@@ -121,3 +121,33 @@ class GeoResult:
 
 def precision_rank(p: Precision) -> int:
     return _PRECISION_RANK.get(p, 0)
+
+
+@dataclass
+class AnalyzeConfig:
+    """Which signals to run + API keys — lets a query be customized.
+
+    Defaults reproduce the classic pipeline. Toggle stages off (e.g. skip the
+    heavy GeoCLIP model when relying on the GeoSeer API) or pass keys directly
+    instead of via environment variables.
+    """
+
+    use_ocr: bool = True
+    use_geoclip: bool = True          # local CLIP model (~1.7 GB) — skip if using GeoSeer
+    use_geoseer: bool = True          # AI API; self-skips if no key is available
+    use_streetclip: bool = False      # heavy 2nd model; off by default
+    use_place_lookup: bool = True
+    use_street_match: bool = True
+    use_osm: bool = True
+    use_inaturalist: bool = True
+    use_solar: bool = True
+
+    geoseer_key: Optional[str] = None       # overrides GEOSEER_API_KEY
+    mapillary_token: Optional[str] = None   # overrides MAPILLARY_TOKEN
+
+    @classmethod
+    def from_env(cls) -> "AnalyzeConfig":
+        """Backward-compatible default: StreetCLIP follows its env flag."""
+        import os
+
+        return cls(use_streetclip=bool(os.environ.get("GEOLOCATOR_STREETCLIP")))

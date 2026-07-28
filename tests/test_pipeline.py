@@ -492,6 +492,31 @@ def test_resolve_weak_disagreement_downweights_only():
     assert round(r.overall_confidence, 2) == 0.36          # 0.60 * 0.6 down-weight
 
 
+# --- AnalyzeConfig / stage selection --------------------------------------- #
+def test_build_stages_default_includes_core():
+    from geolocator.models import AnalyzeConfig
+    names = [n for n, _ in pipeline._build_stages(AnalyzeConfig())]
+    assert "landmark_model" in names and "geoseer" in names
+    assert "second_model" not in names   # StreetCLIP off by default
+
+
+def test_build_stages_geoseer_only_skips_clip():
+    from geolocator.models import AnalyzeConfig
+    cfg = AnalyzeConfig(use_geoclip=False, use_streetclip=False, use_geoseer=True)
+    names = [n for n, _ in pipeline._build_stages(cfg)]
+    assert "geoseer" in names
+    assert "landmark_model" not in names and "second_model" not in names
+
+
+def test_build_stages_toggles_off():
+    from geolocator.models import AnalyzeConfig
+    cfg = AnalyzeConfig(use_ocr=False, use_osm=False, use_inaturalist=False,
+                        use_street_match=False, use_solar=False)
+    names = [n for n, _ in pipeline._build_stages(cfg)]
+    for gone in ("ocr", "osm_crossref", "inaturalist", "street_match", "shadow_flora"):
+        assert gone not in names
+
+
 # --- GeoSeer API locator --------------------------------------------------- #
 def test_geoseer_no_key(monkeypatch):
     from geolocator import geoseer as geoseer_mod
@@ -513,11 +538,11 @@ def test_geoseer_wins_and_survives_streetclip(monkeypatch):
         available=True, requests_remaining=8,
         locations=[geoseer_mod.GeoSeerLocation(lat=-6.2, lon=106.8,
                    address="South Jakarta, Indonesia", confidence=0.95)])
-    monkeypatch.setattr(geoseer_mod, "api_key_configured", lambda: True)
     monkeypatch.setattr(geoseer_mod, "predict", lambda p, **k: fake)
     monkeypatch.setattr(geocode_mod, "reverse",
                         lambda c, **k: Place(display_name="WTC 2, South Jakarta, Indonesia",
                                              country="Indonesia"))
+    r.meta["geoseer_key"] = "test-key"   # stage reads the key from meta
     pipeline.stage_geoseer(r)
     # A GeoSeer signal now outranks the GeoCLIP one.
     best = max((s for s in r.signals if s.locating and s.place),
@@ -536,13 +561,13 @@ def test_geoseer_wins_and_survives_streetclip(monkeypatch):
 def test_geoseer_skipped_when_exif_present(monkeypatch):
     from geolocator import geoseer as geoseer_mod
     called = {"n": 0}
-    monkeypatch.setattr(geoseer_mod, "api_key_configured", lambda: True)
     monkeypatch.setattr(geoseer_mod, "predict",
                         lambda p, **k: called.__setitem__("n", called["n"] + 1))
     r = GeoResult(image_path="x.jpg")
+    r.meta["geoseer_key"] = "test-key"   # key IS available...
     r.add(Signal("exif", "gps", 0.95, Precision.EXACT, coordinates=Coordinates(1, 1)))
     pipeline.stage_geoseer(r)
-    assert called["n"] == 0     # no scarce API call spent when GPS already known
+    assert called["n"] == 0     # ...but no scarce API call spent when GPS already known
 
 
 # --- iNaturalist enrichment ------------------------------------------------ #

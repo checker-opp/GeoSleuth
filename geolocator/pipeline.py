@@ -29,6 +29,7 @@ from . import secondmodel as secondmodel_mod
 from . import solar as solar_mod
 from . import street_match as street_match_mod
 from .models import (
+    AnalyzeConfig,
     Coordinates,
     GeoResult,
     Precision,
@@ -275,12 +276,13 @@ def stage_geoseer(result: GeoResult) -> None:  # AI geolocation API (3rd locator
     aggregation, so a confident GeoSeer result naturally wins over a weaker
     GeoCLIP guess and corroborates an agreeing one.
     """
-    if not geoseer_mod.api_key_configured():
+    key = result.meta.get("geoseer_key")
+    if not key:
         return
     if any(s.precision == Precision.EXACT for s in result.signals):
         return
 
-    res = geoseer_mod.predict(result.image_path)
+    res = geoseer_mod.predict(result.image_path, api_key=key)
     if res.requests_remaining is not None:
         result.meta["geoseer_remaining"] = res.requests_remaining
     if not res.available or res.top is None:
@@ -342,9 +344,6 @@ def stage_second_model(result: GeoResult) -> None:  # optional StreetCLIP cross-
     later decides how it interacts with the GeoCLIP guess (boost / re-rank /
     override / down-weight).
     """
-    if not streetclip_enabled():
-        return
-
     best = max(
         (s for s in result.signals if s.locating and s.place),
         key=lambda s: (precision_rank(s.precision), s.confidence),
@@ -576,7 +575,9 @@ def stage_street_match(result: GeoResult) -> None:  # Phase 4 (Mapillary / Karta
     if coord is None:
         return
 
-    res = street_match_mod.find_street_imagery(coord)
+    res = street_match_mod.find_street_imagery(
+        coord, token=result.meta.get("mapillary_token")
+    )
     if not res.available or not res.images:
         result.note(f"Street matching: no imagery near the candidate ({res.reason}).")
         return
@@ -837,10 +838,53 @@ def _aggregate(result: GeoResult) -> None:
     result.overall_confidence = confidence
 
 
-def analyze(image_path: str) -> GeoResult:
-    """Run the full pipeline over one image and return the aggregated result."""
+def _build_stages(config: AnalyzeConfig):
+    """Ordered (name, fn) stages selected by the config. Order matches STAGES."""
+    stages = [
+        ("exif", stage_exif),
+        ("reverse_image_search", stage_reverse_image_search),
+    ]
+    if config.use_ocr:
+        stages.append(("ocr", stage_ocr))
+    if config.use_geoclip:
+        stages.append(("landmark_model", stage_landmark_model))
+    if config.use_geoseer:
+        stages.append(("geoseer", stage_geoseer))
+    if config.use_streetclip:
+        stages.append(("second_model", stage_second_model))
+    if config.use_place_lookup:
+        stages.append(("place_lookup", stage_place_lookup))
+    stages.append(("resolve_models", stage_resolve_models))  # no-op without a 2nd model
+    if config.use_street_match:
+        stages.append(("street_match", stage_street_match))
+    if config.use_osm:
+        stages.append(("osm_crossref", stage_osm_crossref))
+    if config.use_inaturalist:
+        stages.append(("inaturalist", stage_inaturalist))
+    if config.use_solar:
+        stages.append(("shadow_flora", stage_shadow_flora))
+    return stages
+
+
+def analyze(image_path: str, config: Optional[AnalyzeConfig] = None) -> GeoResult:
+    """Run the pipeline over one image and return the aggregated result.
+
+    ``config`` selects which signals run and can carry API keys directly; it
+    defaults to the classic env-driven behaviour.
+    """
+    config = config or AnalyzeConfig.from_env()
     result = GeoResult(image_path=image_path)
-    for _name, stage in STAGES:
+    result.meta["config"] = config
+
+    # Keys: explicit config wins, else fall back to the environment.
+    gk = config.geoseer_key or os.environ.get(geoseer_mod.API_KEY_ENV)
+    if gk:
+        result.meta["geoseer_key"] = gk
+    mt = config.mapillary_token or os.environ.get(street_match_mod.TOKEN_ENV)
+    if mt:
+        result.meta["mapillary_token"] = mt
+
+    for _name, stage in _build_stages(config):
         stage(result)
     _aggregate(result)
     return result

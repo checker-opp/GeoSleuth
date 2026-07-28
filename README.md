@@ -212,6 +212,37 @@ python -m geolocator ./my_photos/ --json
 geolocate path/to/photo.jpg
 ```
 
+### Customize the query (choose which signals run)
+
+Toggle any signal, and pass keys inline. A **GeoSeer-only** mode skips the heavy
+local CLIP model entirely — fast and API-based:
+
+```bash
+# GeoSeer only (no local ML): fastest, needs the key
+python -m geolocator photo.jpg --geoseer-only --geoseer-key gsk_...
+
+# Turn individual signals on/off
+python -m geolocator photo.jpg --no-geoclip --streetclip
+python -m geolocator photo.jpg --no-ocr --no-inaturalist
+
+# Pass keys instead of env vars
+python -m geolocator photo.jpg --geoseer-key gsk_... --mapillary-token "MLY|..."
+```
+
+Run `python -m geolocator --help` for the full list.
+
+### Web UI
+
+A local web interface to upload an image, paste keys, tick which signals to run
+(including GeoSeer-only), and see the result:
+
+```bash
+python -m geolocator.webui        # then open http://127.0.0.1:5000
+```
+
+Keys entered in the UI are used only for that request and never stored; the
+server binds to localhost only.
+
 ### Example (image with GPS metadata)
 
 ```
@@ -338,9 +369,10 @@ a new signal means writing one function and slotting it in.
 
 ```
 geolocator/
-  cli.py            CLI + report formatting
+  cli.py            CLI + report formatting + signal-selection flags
+  webui.py          local Flask web UI (keys + toggles + results)
   pipeline.py       stage orchestration + confidence aggregation
-  models.py         Signal / GeoResult data structures
+  models.py         Signal / GeoResult / AnalyzeConfig data structures
   # Phase 1 — reliable core
   exif.py           EXIF extraction (exiftool → exifread → Pillow fallback)
   geocode.py        Nominatim reverse + forward (place-name) geocoding
@@ -359,7 +391,8 @@ geolocator/
   reverse_search.py reverse-image-search pivot links
   street_match.py   Mapillary (token) + KartaView (keyless) street imagery
 tests/
-  test_pipeline.py  54 offline tests (no network / binaries needed)
+  test_pipeline.py  57 offline tests (no network / binaries needed)
+COVERAGE.md         spec → implementation traceability (what shipped / substituted / skipped)
 ```
 
 ---

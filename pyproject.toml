@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 geolocate = "geolocator.cli:main"
+geolocate-ui = "geolocator.webui:main"
 
 [tool.setuptools]
 packages = ["geolocator"]

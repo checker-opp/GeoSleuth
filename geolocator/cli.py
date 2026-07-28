@@ -20,7 +20,7 @@ from . import (
     ocr as ocr_mod,
     street_match as street_match_mod,
 )
-from .models import GeoResult, Precision
+from .models import AnalyzeConfig, GeoResult, Precision
 from .pipeline import analyze
 
 
@@ -200,8 +200,53 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--verbose", action="store_true", help="include raw signal evidence in JSON"
     )
+
+    sig = p.add_argument_group("signal selection (customize the query)")
+    bool_opt = argparse.BooleanOptionalAction
+    sig.add_argument("--geoclip", action=bool_opt, default=None,
+                     help="use the local GeoCLIP model (default on)")
+    sig.add_argument("--geoseer", action=bool_opt, default=None,
+                     help="use the GeoSeer AI API (default on if a key is set)")
+    sig.add_argument("--streetclip", action=bool_opt, default=None,
+                     help="use the StreetCLIP 2nd model (default off)")
+    sig.add_argument("--ocr", action=bool_opt, default=None, help="run OCR (default on)")
+    sig.add_argument("--street-match", action=bool_opt, default=None,
+                     help="Mapillary/KartaView street imagery (default on)")
+    sig.add_argument("--osm", action=bool_opt, default=None,
+                     help="Overpass OSM cross-reference (default on)")
+    sig.add_argument("--inaturalist", action=bool_opt, default=None,
+                     help="iNaturalist biome corroboration (default on)")
+    sig.add_argument("--solar", action=bool_opt, default=None,
+                     help="solar/climate corroboration (default on)")
+    sig.add_argument("--geoseer-only", action="store_true",
+                     help="shortcut: GeoSeer only — skip GeoCLIP and StreetCLIP (fast, API-based)")
+
+    keys = p.add_argument_group("API keys (override environment variables)")
+    keys.add_argument("--geoseer-key", metavar="KEY", help="GeoSeer API key")
+    keys.add_argument("--mapillary-token", metavar="TOKEN", help="Mapillary access token")
+
     p.add_argument("--version", action="version", version=f"geolocator {__version__}")
     return p
+
+
+def _config_from_args(args) -> AnalyzeConfig:
+    cfg = AnalyzeConfig.from_env()
+    for name in ("geoclip", "geoseer", "streetclip", "ocr", "osm",
+                 "inaturalist", "solar"):
+        val = getattr(args, name)
+        if val is not None:
+            setattr(cfg, f"use_{name}", val)
+    if args.street_match is not None:
+        cfg.use_street_match = args.street_match
+    if args.geoseer_only:
+        cfg.use_geoclip = False
+        cfg.use_streetclip = False
+        cfg.use_geoseer = True
+    if args.geoseer_key:
+        cfg.geoseer_key = args.geoseer_key
+    if args.mapillary_token:
+        cfg.mapillary_token = args.mapillary_token
+    return cfg
 
 
 def _result_json(result: GeoResult, verbose: bool) -> dict:
@@ -221,9 +266,10 @@ def main(argv: list[str] | None = None) -> int:
     if not images:
         return 2
 
+    config = _config_from_args(args)
     # Analyze each image. The GeoCLIP model is cached after the first load, so a
     # batch reuses it rather than reloading per image.
-    results = [analyze(img) for img in images]
+    results = [analyze(img, config) for img in images]
 
     if args.json:
         if len(results) == 1:

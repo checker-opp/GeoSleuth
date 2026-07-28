@@ -50,8 +50,8 @@ class StreetMatchResult:
     reason: Optional[str] = None
 
 
-def token_configured() -> bool:
-    return bool(os.environ.get(TOKEN_ENV))
+def token_configured(token: Optional[str] = None) -> bool:
+    return bool(token or os.environ.get(TOKEN_ENV))
 
 
 def _bbox(coord: Coordinates, radius_m: float) -> tuple[float, float, float, float]:
@@ -77,8 +77,9 @@ def mapillary_nearby(
     radius_m: float = 100.0,
     limit: int = 5,
     timeout: float = 20.0,
+    token: Optional[str] = None,
 ) -> StreetMatchResult:
-    token = os.environ.get(TOKEN_ENV)
+    token = token or os.environ.get(TOKEN_ENV)
     if not token:
         return StreetMatchResult(
             available=False,
@@ -179,14 +180,15 @@ def kartaview_nearby(
 # Unified: Mapillary first (if token), else / also KartaView
 # --------------------------------------------------------------------------- #
 def find_street_imagery(
-    coord: Coordinates, radius_m: float = 100.0, limit: int = 5
+    coord: Coordinates, radius_m: float = 100.0, limit: int = 5,
+    token: Optional[str] = None,
 ) -> StreetMatchResult:
     """Return the first provider that yields imagery, preferring Mapillary when a
     token is configured and falling back to keyless KartaView otherwise."""
     reasons: list[str] = []
 
-    if token_configured():
-        res = mapillary_nearby(coord, radius_m, limit)
+    if token_configured(token):
+        res = mapillary_nearby(coord, radius_m, limit, token=token)
         if res.available and res.images:
             return res
         reasons.append(res.reason or "Mapillary: no imagery nearby")

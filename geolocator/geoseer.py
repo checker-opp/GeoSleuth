@@ -47,16 +47,18 @@ class GeoSeerResult:
         return self.locations[0] if self.locations else None
 
 
-def api_key_configured() -> bool:
-    return bool(os.environ.get(API_KEY_ENV))
+def api_key_configured(api_key: Optional[str] = None) -> bool:
+    return bool(api_key or os.environ.get(API_KEY_ENV))
 
 
-def predict(path: str, mode: str = "fast", timeout: float = 90.0) -> GeoSeerResult:
+def predict(path: str, api_key: Optional[str] = None, mode: str = "fast",
+            timeout: float = 90.0) -> GeoSeerResult:
     """Send an image to GeoSeer and parse the estimated location(s).
 
-    Never raises on the normal 'not configured / quota / network' paths.
+    ``api_key`` overrides the ``GEOSEER_API_KEY`` env var. Never raises on the
+    normal 'not configured / quota / network' paths.
     """
-    key = os.environ.get(API_KEY_ENV)
+    key = api_key or os.environ.get(API_KEY_ENV)
     if not key:
         return GeoSeerResult(available=False,
                              reason=f"no {API_KEY_ENV} set (free ~10/day key enables GeoSeer)")
