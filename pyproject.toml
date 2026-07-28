@@ -14,6 +14,20 @@ dependencies = [
     "requests>=2.31.0",
     "pytesseract>=0.3.10",
     "langdetect>=1.0.9",
+    "pysolar>=0.11",
+]
+
+# Install profiles:
+#   pip install .            -> API-only (GeoSeer + OCR + geocoding; no downloads)
+#   pip install .[clip]      -> local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
+#   pip install .[web]       -> the browser UI
+#   pip install .[all]       -> everything
+[project.optional-dependencies]
+clip = ["torch>=2.0.0", "geoclip>=1.2.0", "transformers>=4.40,<5"]
+web = ["flask>=3.0.0"]
+all = [
+    "torch>=2.0.0", "geoclip>=1.2.0", "transformers>=4.40,<5",
+    "flask>=3.0.0",
 ]
 
 [project.scripts]

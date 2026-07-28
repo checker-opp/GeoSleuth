@@ -143,14 +143,33 @@ Optionally install it as a `geolocate` command:
 pip install -e .
 ```
 
+### Install profiles — pick how heavy you want it
+
+The tool works three ways; choose at install time:
+
+```bash
+pip install .            # API-only  — GeoSeer + OCR + geocoding, ZERO downloads
+pip install .[clip]      # + local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
+pip install .[web]       # + the browser UI
+pip install .[all]       # everything
+```
+
+- **API-only** (`pip install .`) needs no `torch` and downloads no model weights —
+  it locates via the **GeoSeer API** (free ~10/day) plus OCR/geocoding. Ideal for
+  a lightweight box. Run it with `--geoseer-only`.
+- **Local** (`.[clip]`) adds GeoCLIP so you're not capped by an API quota — at the
+  cost of a `torch` install (~2 GB) and a one-time ~1.7 GB model download.
+- The **web UI** (`.[web]`) can even download the local models for you, with a
+  progress bar — see [Web UI](#web-ui).
+
 ### 2. ML engine — GeoCLIP (the no-metadata workhorse)
 
 Most photos have their GPS stripped; GeoCLIP is what actually locates them from
-pixels. It pulls in `torch`, kept in a separate requirements file so the core
-stays lightweight:
+pixels. It pulls in `torch` (the `[clip]` profile above), kept optional so the
+core stays lightweight:
 
 ```bash
-pip install -r requirements.txt -r requirements-ml.txt
+pip install -r requirements.txt -r requirements-ml.txt   # equivalent to .[clip]
 ```
 
 - **torch** — ~200 MB download / ~2 GB installed; the pinned CPU build runs
@@ -211,6 +230,40 @@ python -m geolocator ./my_photos/ --json
 # If installed with `pip install -e .`
 geolocate path/to/photo.jpg
 ```
+
+### Customize the query (choose which signals run)
+
+```bash
+# API-only — skip the local CLIP models entirely (fast, no downloads)
+python -m geolocator photo.jpg --geoseer-only --geoseer-key gsk_...
+
+# Full stack — local GeoCLIP + StreetCLIP second opinion
+python -m geolocator photo.jpg --streetclip
+
+# Turn individual signals off
+python -m geolocator photo.jpg --no-geoclip --no-inaturalist
+```
+
+Every signal has a `--x` / `--no-x` flag (`--geoclip`, `--geoseer`, `--streetclip`,
+`--ocr`, `--street-match`, `--osm`, `--inaturalist`, `--solar`), plus
+`--geoseer-key` / `--mapillary-token` to pass keys without env vars.
+
+## Web UI
+
+A local browser app to upload an image, paste API keys, tick exactly which
+signals to run, and **download the local models with a progress bar** (then tick
+them to use):
+
+```bash
+pip install .[web]
+geolocate-ui                 # → http://127.0.0.1:5000
+```
+
+- Enter your **GeoSeer**/**Mapillary** keys in the form (kept in memory, never saved).
+- Toggle signals, or hit **GeoSeer-only** to run without any local model.
+- The **Local models** panel shows GeoCLIP/StreetCLIP status; if not downloaded,
+  a **Download** button fetches the weights and shows live progress, then enables
+  the matching toggle. Binds to localhost only.
 
 ### Customize the query (choose which signals run)
 
@@ -390,8 +443,11 @@ geolocator/
   plates.py         license-plate format → country hint
   reverse_search.py reverse-image-search pivot links
   street_match.py   Mapillary (token) + KartaView (keyless) street imagery
+  # UI + config
+  webui.py          Flask browser app (keys, toggles, in-UI model downloads)
+  modelmgr.py       local-model status + download-with-progress
 tests/
-  test_pipeline.py  57 offline tests (no network / binaries needed)
+  test_pipeline.py  62 offline tests (no network / binaries needed)
 COVERAGE.md         spec → implementation traceability (what shipped / substituted / skipped)
 ```
 

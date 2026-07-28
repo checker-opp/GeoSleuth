@@ -17,6 +17,7 @@ import tempfile
 
 from .models import AnalyzeConfig, Precision
 from .pipeline import analyze
+from . import modelmgr
 
 _PRECISION_LABEL = {
     "exact": "exact coordinates",
@@ -82,8 +83,8 @@ PAGE = """
         <b>GeoSeer-only</b> — skip the local CLIP models (fast, API-based)</label>
       <div class="toggles">
         <label><input type="checkbox" name="use_geoseer" {% if checks.use_geoseer %}checked{% endif %}> GeoSeer AI</label>
-        <label><input type="checkbox" name="use_geoclip" class="clip" {% if checks.use_geoclip %}checked{% endif %}> GeoCLIP (local)</label>
-        <label><input type="checkbox" name="use_streetclip" class="clip" {% if checks.use_streetclip %}checked{% endif %}> StreetCLIP (2nd model)</label>
+        <label><input type="checkbox" name="use_geoclip" class="clip" data-model="geoclip" {% if checks.use_geoclip %}checked{% endif %}> GeoCLIP (local)</label>
+        <label><input type="checkbox" name="use_streetclip" class="clip" data-model="streetclip" {% if checks.use_streetclip %}checked{% endif %}> StreetCLIP (2nd model)</label>
         <label><input type="checkbox" name="use_ocr" {% if checks.use_ocr %}checked{% endif %}> OCR + plates</label>
         <label><input type="checkbox" name="use_street_match" {% if checks.use_street_match %}checked{% endif %}> Street imagery</label>
         <label><input type="checkbox" name="use_osm" {% if checks.use_osm %}checked{% endif %}> OSM cross-ref</label>
@@ -94,6 +95,11 @@ PAGE = """
 
     <button type="submit">Locate</button>
   </form>
+
+  <div class="card">
+    <div class="muted">LOCAL MODELS <span style="text-transform:none">— download once, then tick to use</span></div>
+    <div id="models"><div class="muted" style="margin-top:8px">checking…</div></div>
+  </div>
 
   {% if error %}<div class="card err">{{ error }}</div>{% endif %}
 
@@ -140,10 +146,51 @@ PAGE = """
 </div>
 <script>
   const only = document.getElementById('geoseer_only');
-  function sync() {
-    document.querySelectorAll('.clip').forEach(cb => { cb.disabled = only.checked; if (only.checked) cb.checked = false; });
+  // A local-model checkbox is usable only when NOT in GeoSeer-only mode AND the
+  // weights are downloaded (data-ready set by the model poller below).
+  function syncClip() {
+    document.querySelectorAll('.clip').forEach(cb => {
+      const ready = cb.dataset.ready === '1';
+      cb.disabled = only.checked || !ready;
+      if (cb.disabled) cb.checked = false;
+    });
   }
-  only.addEventListener('change', sync); sync();
+  only.addEventListener('change', syncClip);
+
+  async function refreshModels() {
+    let s; try { s = await (await fetch('/models/status')).json(); } catch (e) { return; }
+    const box = document.getElementById('models'); box.innerHTML = '';
+    for (const key in s) {
+      const m = s[key];
+      const badge = m.state === 'ready' ? '<span style="color:#2ea043">● ready</span>'
+        : m.state === 'downloading' ? '<span style="color:#d29922">● downloading ' + m.percent + '%</span>'
+        : m.state === 'error' ? '<span style="color:#f85149">● error</span>'
+        : m.state === 'needs_packages' ? '<span style="color:#8b949e">● needs packages</span>'
+        : '<span style="color:#8b949e">● not downloaded</span>';
+      let body = '';
+      if (m.state === 'downloading')
+        body = '<div class="bar"><div style="width:' + m.percent + '%;background:#d29922"></div></div>'
+             + '<div class="muted">' + m.downloaded_mb + ' / ' + (m.total_mb || '?') + ' MB</div>';
+      else if (m.state === 'needs_packages')
+        body = '<div class="muted">install first: <span class="tag">' + m.install_hint + '</span></div>';
+      else if (m.state !== 'ready')
+        body = '<button type="button" style="margin-top:8px;padding:7px 14px;font-size:13px" onclick="dl(\\'' + key + '\\')">Download (~' + m.approx_gb + ' GB)</button>';
+      if (m.error) body += '<div class="err">' + m.error + '</div>';
+      const d = document.createElement('div');
+      d.style.cssText = 'border:1px solid #30363d;border-radius:8px;padding:10px;margin:8px 0';
+      d.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center"><b>' + m.label + '</b>' + badge + '</div>' + body;
+      box.appendChild(d);
+      const cb = document.querySelector('.clip[data-model="' + key + '"]');
+      if (cb) cb.dataset.ready = (m.state === 'ready') ? '1' : '0';
+    }
+    syncClip();
+  }
+  async function dl(model) {
+    await fetch('/models/download', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    refreshModels();
+  }
+  setInterval(refreshModels, 1500); refreshModels();
 </script>
 </body></html>
 """
@@ -180,7 +227,7 @@ def _conf_color(conf: float) -> str:
 
 
 def create_app():
-    from flask import Flask, request, render_template_string
+    from flask import Flask, request, render_template_string, jsonify
 
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB uploads
@@ -198,6 +245,15 @@ def create_app():
     @app.route("/", methods=["GET"])
     def index():
         return render()
+
+    @app.route("/models/status", methods=["GET"])
+    def models_status():
+        return jsonify(modelmgr.all_status())
+
+    @app.route("/models/download", methods=["POST"])
+    def models_download():
+        data = request.get_json(silent=True) or {}
+        return jsonify(modelmgr.start_download(data.get("model", "")))
 
     @app.route("/analyze", methods=["POST"])
     def do_analyze():

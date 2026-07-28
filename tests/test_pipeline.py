@@ -587,6 +587,48 @@ def test_inaturalist_enrichment(monkeypatch):
     assert r.best_precision == Precision.CITY     # enrichment didn't change the guess
 
 
+# --- config-driven pipeline ------------------------------------------------ #
+def test_config_geoseer_only_skips_clip():
+    from geolocator.models import AnalyzeConfig
+    cfg = AnalyzeConfig(use_geoclip=False, use_streetclip=False, use_geoseer=True)
+    names = [n for n, _ in pipeline._build_stages(cfg)]
+    assert "landmark_model" not in names   # no local GeoCLIP
+    assert "second_model" not in names     # no StreetCLIP
+    assert "geoseer" in names
+
+
+def test_config_all_on_matches_full_pipeline():
+    from geolocator.models import AnalyzeConfig
+    cfg = AnalyzeConfig(use_streetclip=True)
+    names = [n for n, _ in pipeline._build_stages(cfg)]
+    for s in ("exif", "ocr", "landmark_model", "geoseer", "second_model",
+              "place_lookup", "street_match", "osm_crossref", "inaturalist"):
+        assert s in names
+
+
+def test_webui_config_from_form_geoseer_only():
+    from geolocator import webui
+    form = {"geoseer_only": "on", "use_geoseer": "on", "use_ocr": "on"}
+    cfg = webui._config_from_form(form)
+    assert cfg.use_geoclip is False and cfg.use_streetclip is False
+    assert cfg.use_geoseer is True and cfg.use_ocr is True
+
+
+# --- model manager --------------------------------------------------------- #
+def test_modelmgr_unknown_model():
+    from geolocator import modelmgr
+    r = modelmgr.start_download("bogus")
+    assert r["ok"] is False
+
+
+def test_modelmgr_status_shape():
+    from geolocator import modelmgr
+    s = modelmgr.all_status()
+    assert set(s.keys()) == {"geoclip", "streetclip"}
+    for m in s.values():
+        assert "state" in m and "percent" in m and "approx_gb" in m
+
+
 # --- extractor safety ------------------------------------------------------ #
 def test_extract_missing_file_returns_empty_shell():
     data = exif_mod.extract("does_not_exist_12345.jpg")
