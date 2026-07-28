@@ -29,9 +29,10 @@ pip install -e .            # or: pip install -r requirements.txt
 winget install UB-Mannheim.TesseractOCR                 # Windows
 #    macOS:  brew install tesseract      Debian/Ubuntu:  sudo apt install tesseract-ocr
 
-# 5. Run it — command line, or the browser UI
-python -m geolocator path/to/photo.jpg     # CLI (or:  geolocate path/to/photo.jpg)
-geolocate-ui                               # Web UI → http://127.0.0.1:5000
+# 5. Run it — one image, a whole folder (batch), or the browser UI
+python -m geolocator path/to/photo.jpg      # single image (or:  geolocate photo.jpg)
+python -m geolocator path/to/folder/ --json # batch: every image in a folder → JSON
+geolocate-ui                                # Web UI → http://127.0.0.1:5000
 ```
 
 > **One install, everything included.** `torch` + the local **GeoCLIP** model come
