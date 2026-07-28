@@ -54,13 +54,18 @@ class Signal:
     precision: Precision = Precision.UNKNOWN
     coordinates: Optional[Coordinates] = None
     place: Optional[str] = None          # resolved place name, if any
-    # True only for *independent locating* evidence — a signal that on its own
-    # points at WHERE the photo was taken (EXIF GPS, an ML estimate, an OCR
-    # place/language, a plate country). These may boost confidence when they
-    # agree. False for *enrichment* signals (nearby OSM features, "street
-    # imagery exists", climate zone) — they confirm a coordinate is a real,
-    # photographable place, NOT that this image was taken there, so they add
-    # evidence but must never inflate confidence.
+    # A *locating* signal proposes WHERE the photo was taken (EXIF GPS, ML
+    # estimate, OCR place/language, plate country) and is eligible to win the
+    # best-location slot. Enrichment signals (nearby OSM features, "street
+    # imagery exists", climate zone) set this False: they describe/corroborate a
+    # candidate but must never become the chosen location — they carry no place
+    # of their own and would hijack the slot from a real locator.
+    locating: bool = True
+    # Among locating signals, True marks *independent secondary* evidence that
+    # may boost confidence when it agrees (OCR language, plate country). The
+    # primary locators (EXIF/ML) leave this False — they set the base
+    # confidence rather than adding a bonus to themselves. Enrichment signals
+    # are always False here too.
     corroborating: bool = False
     evidence: dict[str, Any] = field(default_factory=dict)  # raw supporting data
 

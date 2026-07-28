@@ -281,6 +281,7 @@ def stage_street_match(result: GeoResult) -> None:  # Phase 4 (Mapillary / Karta
             confidence=0.20,
             precision=Precision.CITY,
             coordinates=coord,
+            locating=False,       # enrichment: echoes the candidate
             corroborating=False,  # imagery existing != this photo taken here
             evidence={
                 "provider": provider,
@@ -295,8 +296,11 @@ def stage_street_match(result: GeoResult) -> None:  # Phase 4 (Mapillary / Karta
 # Corroboration helpers (Phase 3 stages operate on the best candidate so far)
 # --------------------------------------------------------------------------- #
 def _current_best_coord(result: GeoResult) -> Optional[Coordinates]:
-    """The coordinates of the most precise coordinate-bearing signal so far."""
-    coord_signals = [s for s in result.signals if s.coordinates is not None]
+    """Coordinates of the most precise *locating* signal so far (enrichment
+    signals only echo a candidate, so they're excluded)."""
+    coord_signals = [
+        s for s in result.signals if s.coordinates is not None and s.locating
+    ]
     if not coord_signals:
         return None
     best = max(coord_signals, key=lambda s: (precision_rank(s.precision), s.confidence))
@@ -326,6 +330,7 @@ def stage_osm_crossref(result: GeoResult) -> None:  # Phase 3 (Overpass)
             confidence=0.20,
             precision=Precision.CITY,
             coordinates=coord,
+            locating=False,   # enrichment: echoes the candidate, not its own fix
             evidence={"features": names, "radius_m": 300},
         )
     )
@@ -390,6 +395,7 @@ def stage_shadow_flora(result: GeoResult) -> None:  # Phase 3 (solar + climate)
             confidence=confidence,
             # Enrichment/consistency — never overrides the actual location fix.
             precision=Precision.UNKNOWN,
+            locating=False,
             evidence=evidence,
         )
     )
@@ -422,9 +428,13 @@ def _aggregate(result: GeoResult) -> None:
         result.best_precision = Precision.UNKNOWN
         return
 
+    # Only *locating* signals may win the location slot — enrichment signals
+    # (OSM/street/climate) describe a candidate but carry no place of their own.
+    locating = [s for s in result.signals if s.locating]
+    pool = locating or result.signals
     # Pick the winning signal: highest precision, then highest confidence.
     best = max(
-        result.signals,
+        pool,
         key=lambda s: (precision_rank(s.precision), s.confidence),
     )
     result.best_coordinates = best.coordinates

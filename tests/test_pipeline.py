@@ -90,6 +90,23 @@ def test_corroboration_bonus_capped():
     assert r.overall_confidence > 0.30  # but corroboration did raise it
 
 
+def test_enrichment_never_wins_location_slot():
+    # Regression: a coarse (country-level) ML locator must keep the location
+    # slot even when higher-precision *enrichment* signals (city-level OSM/
+    # street, locating=False) are present — those carry no place of their own.
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("ml_geoclip", "Karachi (spread out)", 0.35, Precision.COUNTRY,
+                 coordinates=Coordinates(24.86, 67.01), place="Karachi, Pakistan"))
+    r.add(Signal("osm", "nearby places", 0.20, Precision.CITY,
+                 coordinates=Coordinates(24.86, 67.01), locating=False))
+    r.add(Signal("street_match", "imagery exists", 0.20, Precision.CITY,
+                 coordinates=Coordinates(24.86, 67.01), locating=False))
+    pipeline._aggregate(r)
+    assert r.best_place == "Karachi, Pakistan"      # locator won, not enrichment
+    assert r.best_precision == Precision.COUNTRY
+    assert r.overall_confidence == 0.35
+
+
 def test_enrichment_signals_do_not_boost_confidence():
     # An ML guess plus enrichment-only signals (OSM/street/climate, i.e.
     # corroborating=False) must NOT raise confidence — those fire for any real
