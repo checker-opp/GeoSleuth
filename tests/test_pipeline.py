@@ -492,6 +492,76 @@ def test_resolve_weak_disagreement_downweights_only():
     assert round(r.overall_confidence, 2) == 0.36          # 0.60 * 0.6 down-weight
 
 
+# --- GeoSeer API locator --------------------------------------------------- #
+def test_geoseer_no_key(monkeypatch):
+    from geolocator import geoseer as geoseer_mod
+    monkeypatch.delenv("GEOSEER_API_KEY", raising=False)
+    assert geoseer_mod.api_key_configured() is False
+    res = geoseer_mod.predict("x.jpg")
+    assert res.available is False and "GEOSEER_API_KEY" in res.reason
+
+
+def test_geoseer_wins_and_survives_streetclip(monkeypatch):
+    from geolocator import geoseer as geoseer_mod, geocode as geocode_mod
+    from geolocator.geocode import Place
+    r = GeoResult(image_path="x.jpg")
+    # GeoCLIP wrongly says Mexico
+    r.add(Signal("ml_geoclip", "geo", 0.60, Precision.CITY,
+                 coordinates=Coordinates(19.4, -99.1), place="Reforma, Mexico City, Mexico",
+                 corroborating=True, evidence={"top_k": [{"lat": 19.4, "lon": -99.1, "prob": 0.2}]}))
+    fake = geoseer_mod.GeoSeerResult(
+        available=True, requests_remaining=8,
+        locations=[geoseer_mod.GeoSeerLocation(lat=-6.2, lon=106.8,
+                   address="South Jakarta, Indonesia", confidence=0.95)])
+    monkeypatch.setattr(geoseer_mod, "api_key_configured", lambda: True)
+    monkeypatch.setattr(geoseer_mod, "predict", lambda p, **k: fake)
+    monkeypatch.setattr(geocode_mod, "reverse",
+                        lambda c, **k: Place(display_name="WTC 2, South Jakarta, Indonesia",
+                                             country="Indonesia"))
+    pipeline.stage_geoseer(r)
+    # A GeoSeer signal now outranks the GeoCLIP one.
+    best = max((s for s in r.signals if s.locating and s.place),
+               key=lambda s: (precision_rank(s.precision), s.confidence))
+    assert best.source == "geoseer"
+    # StreetCLIP disagrees (says Mexico) — must NOT override the stronger GeoSeer.
+    r.add(Signal("streetclip", "sc", 0.9, Precision.COUNTRY, locating=False,
+                 evidence={"country": "Mexico", "score": 0.9}))
+    r.meta["streetclip"] = {"country": "Mexico", "score": 0.9}
+    pipeline.stage_resolve_models(r)
+    pipeline._aggregate(r)
+    assert "Indonesia" in (r.best_place or "")     # GeoSeer stood its ground
+    assert r.best_precision == Precision.CITY
+
+
+def test_geoseer_skipped_when_exif_present(monkeypatch):
+    from geolocator import geoseer as geoseer_mod
+    called = {"n": 0}
+    monkeypatch.setattr(geoseer_mod, "api_key_configured", lambda: True)
+    monkeypatch.setattr(geoseer_mod, "predict",
+                        lambda p, **k: called.__setitem__("n", called["n"] + 1))
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("exif", "gps", 0.95, Precision.EXACT, coordinates=Coordinates(1, 1)))
+    pipeline.stage_geoseer(r)
+    assert called["n"] == 0     # no scarce API call spent when GPS already known
+
+
+# --- iNaturalist enrichment ------------------------------------------------ #
+def test_inaturalist_enrichment(monkeypatch):
+    from geolocator import inaturalist as inat_mod
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("ml_geoclip", "geo", 0.6, Precision.CITY,
+                 coordinates=Coordinates(-6.2, 106.8), place="Jakarta, Indonesia"))
+    fake = inat_mod.InatResult(available=True, taxa=[
+        inat_mod.Taxon(name="Varanus salvator", common_name="Common Water Monitor",
+                       group="Reptilia", observations=10)])
+    monkeypatch.setattr(inat_mod, "nearby_taxa", lambda c, **k: fake)
+    pipeline.stage_inaturalist(r)
+    sig = next(s for s in r.signals if s.source == "inaturalist")
+    assert sig.locating is False and "Water Monitor" in sig.description
+    pipeline._aggregate(r)
+    assert r.best_precision == Precision.CITY     # enrichment didn't change the guess
+
+
 # --- extractor safety ------------------------------------------------------ #
 def test_extract_missing_file_returns_empty_shell():
     data = exif_mod.extract("does_not_exist_12345.jpg")

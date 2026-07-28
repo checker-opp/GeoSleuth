@@ -19,6 +19,8 @@ from . import climate as climate_mod
 from . import exif as exif_mod
 from . import geocode as geocode_mod
 from . import geoestimate as geoestimate_mod
+from . import geoseer as geoseer_mod
+from . import inaturalist as inaturalist_mod
 from . import ocr as ocr_mod
 from . import osm as osm_mod
 from . import plates as plates_mod
@@ -264,6 +266,65 @@ def stage_landmark_model(result: GeoResult) -> None:  # Phase 2 (GeoCLIP)
     )
 
 
+def stage_geoseer(result: GeoResult) -> None:  # AI geolocation API (3rd locator)
+    """GeoSeer AI geolocation — a strong independent locator when its key is set.
+
+    Skipped without GEOSEER_API_KEY, and skipped when an exact GPS fix already
+    exists (no point spending a scarce ~10/day API call). Emits a locating
+    signal with the API's coordinates + confidence; it competes in the normal
+    aggregation, so a confident GeoSeer result naturally wins over a weaker
+    GeoCLIP guess and corroborates an agreeing one.
+    """
+    if not geoseer_mod.api_key_configured():
+        return
+    if any(s.precision == Precision.EXACT for s in result.signals):
+        return
+
+    res = geoseer_mod.predict(result.image_path)
+    if res.requests_remaining is not None:
+        result.meta["geoseer_remaining"] = res.requests_remaining
+    if not res.available or res.top is None:
+        result.note(f"GeoSeer skipped: {res.reason}")
+        return
+
+    loc = res.top
+    coords = Coordinates(loc.lat, loc.lon)
+    # Prefer a normalized Nominatim place; fall back to the API's address.
+    place = geocode_mod.reverse(coords)
+    place_name = place.display_name if place else loc.address
+
+    api_conf = loc.confidence
+    if api_conf >= 0.6:
+        precision = Precision.CITY
+    elif api_conf >= 0.35:
+        precision = Precision.REGION
+    else:
+        precision = Precision.COUNTRY
+
+    result.add(
+        Signal(
+            source="geoseer",
+            description=(
+                f"GeoSeer AI estimate (p={api_conf:.2f})"
+                + (f" → {place_name}" if place_name else "")
+            ),
+            confidence=min(0.80, api_conf),  # strong, but never rivals a GPS fix
+            precision=precision,
+            coordinates=coords,
+            place=place_name,
+            corroborating=True,
+            evidence={
+                "api_confidence": api_conf,
+                "api_address": loc.address,
+                "reasoning": (loc.reasoning or "")[:280] or None,
+                "requests_remaining": res.requests_remaining,
+            },
+        )
+    )
+    if res.requests_remaining is not None:
+        result.note(f"GeoSeer: {res.requests_remaining} API request(s) remaining today.")
+
+
 # Opt-in: StreetCLIP is a heavy second model (~1.6 GB, slow on CPU). Off unless
 # GEOLOCATOR_STREETCLIP is set, so normal runs stay fast.
 STREETCLIP_ENV = "GEOLOCATOR_STREETCLIP"
@@ -380,6 +441,12 @@ def stage_resolve_models(result: GeoResult) -> None:
 
     if sc_score < _OVERRIDE_MIN_SCORE:
         return  # too weak to override; the down-weight in _aggregate is enough
+
+    # Only correct GeoCLIP — it's the locator prone to confident continental
+    # errors. Stronger locators (GeoSeer, an OCR place match) are trusted; a
+    # StreetCLIP disagreement with them only down-weights, never overrides.
+    if ml.source != "ml_geoclip":
+        return
 
     # 1) Re-rank: look for a top-5 GeoCLIP prediction in StreetCLIP's country.
     topk = (ml.evidence or {}).get("top_k", [])
@@ -580,6 +647,48 @@ def stage_osm_crossref(result: GeoResult) -> None:  # Phase 3 (Overpass)
     )
 
 
+def stage_inaturalist(result: GeoResult) -> None:  # Phase 3 (biodiversity enrichment)
+    """Corroborate the candidate's biome with species actually observed nearby.
+
+    Enrichment only (locating=False): it sanity-checks / describes a candidate
+    coordinate with real biodiversity data, it doesn't locate on its own.
+    """
+    coord = _current_best_coord(result)
+    if coord is None:
+        return
+
+    res = inaturalist_mod.nearby_taxa(coord)
+    if not res.available:
+        result.note(f"iNaturalist cross-reference skipped: {res.reason}")
+        return
+    if not res.taxa:
+        result.note("iNaturalist: no research-grade observations near the candidate.")
+        return
+
+    def label(t):
+        return t.common_name or t.name
+
+    names = [label(t) for t in res.taxa[:5]]
+    result.add(
+        Signal(
+            source="inaturalist",
+            description="Species observed nearby corroborate the biome: "
+            + ", ".join(names),
+            confidence=0.08,
+            precision=Precision.UNKNOWN,
+            coordinates=coord,
+            locating=False,
+            evidence={
+                "taxa": [
+                    {"name": t.name, "common": t.common_name, "group": t.group,
+                     "observations": t.observations}
+                    for t in res.taxa
+                ]
+            },
+        )
+    )
+
+
 def stage_shadow_flora(result: GeoResult) -> None:  # Phase 3 (solar + climate)
     """Solar consistency + climate-zone descriptor for the candidate."""
     coord = _current_best_coord(result)
@@ -651,11 +760,13 @@ STAGES = [
     ("reverse_image_search", stage_reverse_image_search),
     ("ocr", stage_ocr),
     ("landmark_model", stage_landmark_model),
+    ("geoseer", stage_geoseer),
     ("second_model", stage_second_model),
     ("place_lookup", stage_place_lookup),
     ("resolve_models", stage_resolve_models),
     ("street_match", stage_street_match),
     ("osm_crossref", stage_osm_crossref),
+    ("inaturalist", stage_inaturalist),
     ("shadow_flora", stage_shadow_flora),
 ]
 

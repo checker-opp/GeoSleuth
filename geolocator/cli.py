@@ -16,6 +16,7 @@ from . import (
     __version__,
     exif as exif_mod,
     geoestimate as geoestimate_mod,
+    geoseer as geoseer_mod,
     ocr as ocr_mod,
     street_match as street_match_mod,
 )
@@ -140,6 +141,7 @@ def _print_human(result: GeoResult) -> None:
     tools.append(("exiftool", exif_mod.exiftool_available()))
     tools.append(("tesseract (OCR)", ocr_mod.tesseract_available()))
     tools.append(("ML geo-estimation (GeoCLIP)", geoestimate_mod.ml_available()))
+    tools.append(("GeoSeer AI locator (GEOSEER_API_KEY)", geoseer_mod.api_key_configured()))
     tools.append(("Mapillary street match (MAPILLARY_TOKEN)", street_match_mod.token_configured()))
     missing = [name for name, ok in tools if not ok]
     if missing:

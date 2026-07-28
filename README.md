@@ -102,10 +102,12 @@ Every result ships with its **confidence** and **evidence trail** — never a ba
 | **EXIF metadata** | Camera, timestamp, timezone-offset longitude hint | context only |
 | **OCR** (Tesseract) | Visible text → detected language → candidate countries | ★★☆ coarse hint |
 | **ML estimate** (GeoCLIP) | Predicted coordinates from visual content alone — the no-metadata workhorse | ★★★☆ on distinctive scenes, honestly low on generic/indoor |
+| **GeoSeer AI** (opt-in key) | Dedicated geolocation API (GeoSpy-style) → coordinates + address + confidence; strongest single locator | ★★★★ (free tier ~10/day) |
 | **OCR place lookup** | A business/place name OCR reads, geocoded and cross-checked against the visual estimate | ★★★★ when it matches — turns a sign into coordinates |
 | **StreetCLIP** (opt-in) | Independent 2nd model's country vote; agrees→boost, disagrees→re-rank/override GeoCLIP | cross-model corroboration + **error correction** |
 | **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
 | **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
+| **iNaturalist** | Species actually observed near the candidate — corroborates the biome | corroboration (keyless) |
 | **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
 | **Street match** (Mapillary / KartaView) | Nearby street-level imagery to visually confirm the guess | pivot / corroboration |
 | **Reverse-search pivots** | Ready-to-open Yandex/Lens/Bing/TinEye upload links | manual next step |
@@ -293,9 +295,10 @@ as the answer.
 
 | Item | Why it's not automatic | To enable |
 |------|------------------------|-----------|
+| **GeoSeer AI locator** | strong AI geolocation, needs a free API key (~10/day) | set `GEOSEER_API_KEY` (from [geoseeer.com](https://geoseeer.com)); becomes the primary locator when confident |
 | **Mapillary street matching** | better global coverage, needs a free API token | set `MAPILLARY_TOKEN` (see [dashboard](https://www.mapillary.com/dashboard/developers)); without it, street matching still works via keyless **KartaView** (sparser outside Europe) |
 | **Automated reverse image search** | Yandex/Lens fight scraping; TinEye API is paid. We do **not** scrape or bypass CAPTCHAs | use the printed pivot links to search manually, or add a keyed TinEye/Bing client later |
-| **Flora → region from the image** | needs a plant-ID vision model | Phase 3 currently describes climate from the *candidate* coordinate instead |
+| **Flora → region from the image** | needs a plant-ID vision model | iNaturalist is wired in the *other* direction (candidate coordinate → nearby species, as biome corroboration) |
 | **Shadow-angle → latitude** | needs CV shadow detection in the image | Phase 3 currently does the metadata-side solar check instead |
 
 The pipeline (`geolocator/pipeline.py`) defines every stage in `STAGES` — adding
@@ -307,6 +310,7 @@ a new signal means writing one function and slotting it in.
 
 | Variable | Effect |
 |----------|--------|
+| `GEOSEER_API_KEY` | enables the GeoSeer AI locator (strong 3rd opinion; **free tier ~10 requests/day** — best on single important images, not big batches) |
 | `MAPILLARY_TOKEN` | prefers Mapillary for street matching (better coverage); without it, keyless KartaView is used |
 | `GEOLOCATOR_STREETCLIP` | set to `1` to enable the StreetCLIP second-model cross-check (~1.6 GB one-time download — see note below) |
 | `NO_COLOR` | disables ANSI colour in the terminal report |
@@ -341,19 +345,21 @@ geolocator/
   exif.py           EXIF extraction (exiftool → exifread → Pillow fallback)
   geocode.py        Nominatim reverse + forward (place-name) geocoding
   ocr.py            Tesseract OCR (upscale/contrast/multi-PSM) + langdetect
-  # Phase 2 — ML
+  # Phase 2 — ML / AI locators
   geoestimate.py    GeoCLIP image → coordinates (lazy, optional)
-  secondmodel.py    StreetCLIP zero-shot country cross-check (opt-in, GPU)
+  geoseer.py        GeoSeer AI geolocation API (opt-in key, ~10/day free)
+  secondmodel.py    StreetCLIP zero-shot country cross-check (opt-in)
   # Phase 3 — corroboration
   solar.py          timezone↔longitude + sun-elevation checks (pysolar)
   climate.py        coarse latitude/climate-zone descriptor
   osm.py            Overpass nearby-feature cross-reference
+  inaturalist.py    iNaturalist nearby-species biome corroboration (keyless)
   # Phase 4 — best-effort external
   plates.py         license-plate format → country hint
   reverse_search.py reverse-image-search pivot links
   street_match.py   Mapillary (token) + KartaView (keyless) street imagery
 tests/
-  test_pipeline.py  50 offline tests (no network / binaries needed)
+  test_pipeline.py  54 offline tests (no network / binaries needed)
 ```
 
 ---
