@@ -63,11 +63,24 @@ PAGE = """
   h3 { margin:18px 0 6px; font-size:15px; }
   fieldset { border:1px solid #30363d; border-radius:8px; margin:14px 0 0; padding:8px 14px 14px; }
   legend { color:#8b949e; font-size:12px; padding:0 6px; }
+  .overlay { position:fixed; inset:0; background:rgba(13,17,23,.88); display:none;
+             flex-direction:column; align-items:center; justify-content:center; z-index:100; }
+  .overlay.show { display:flex; }
+  .spinner { width:48px; height:48px; border:4px solid #30363d; border-top-color:#2ea043;
+             border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .overlay p { color:#e6edf3; margin:16px 0 0; font-size:16px; font-weight:600; }
+  .overlay .sub { color:#8b949e; font-size:13px; margin-top:6px; }
 </style></head><body><div class="wrap">
+  <div class="overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <p>Analyzing…</p>
+    <div class="sub">local models can take ~30–60 s on the first run</div>
+  </div>
   <h1><span>geo</span>locator — image → location</h1>
   <p class="sub">Upload a photo, choose your signals, and get a best guess with confidence + evidence.</p>
 
-  <form method="post" action="/analyze" enctype="multipart/form-data">
+  <form id="locateForm" method="post" action="/analyze" enctype="multipart/form-data">
     <label>Image</label>
     <input type="file" name="image" accept="image/*" required>
 
@@ -147,6 +160,12 @@ PAGE = """
   <p class="muted" style="margin-top:24px">Keys are used only for this request and never stored. Runs locally.</p>
 </div>
 <script>
+  // Show the loading overlay as soon as the form is submitted (the page then
+  // does a full POST and won't return for ~30-60s while models run).
+  document.getElementById('locateForm').addEventListener('submit', function () {
+    document.getElementById('loadingOverlay').classList.add('show');
+  });
+
   const only = document.getElementById('geoseer_only');
   // A local-model checkbox is usable only when NOT in GeoSeer-only mode AND the
   // weights are downloaded (data-ready set by the model poller below).
