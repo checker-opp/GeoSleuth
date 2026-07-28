@@ -270,8 +270,28 @@ def test_street_bbox_contains_point():
 def test_street_token_gate(monkeypatch):
     monkeypatch.delenv("MAPILLARY_TOKEN", raising=False)
     assert street_match_mod.token_configured() is False
-    res = street_match_mod.nearby(Coordinates(0, 0))
+    res = street_match_mod.mapillary_nearby(Coordinates(0, 0))
     assert res.available is False and "MAPILLARY_TOKEN" in res.reason
+
+
+def test_kartaview_viewer_url():
+    url = street_match_mod._kartaview_viewer_url(2061158, 3)
+    assert url == "https://kartaview.org/details/2061158/3"
+
+
+def test_find_street_imagery_falls_back_to_kartaview(monkeypatch):
+    # No token -> Mapillary is skipped -> KartaView is consulted. Stub the
+    # KartaView call so the test stays offline.
+    monkeypatch.delenv("MAPILLARY_TOKEN", raising=False)
+    stub = street_match_mod.StreetMatchResult(
+        available=True, provider="kartaview",
+        images=[street_match_mod.StreetImage(
+            id="1", lat=44.4, lon=26.1, provider="KartaView",
+            viewer_url="https://kartaview.org/details/1/0")],
+    )
+    monkeypatch.setattr(street_match_mod, "kartaview_nearby", lambda *a, **k: stub)
+    res = street_match_mod.find_street_imagery(Coordinates(44.4, 26.1))
+    assert res.available and res.images[0].provider == "KartaView"
 
 
 # --- extractor safety ------------------------------------------------------ #

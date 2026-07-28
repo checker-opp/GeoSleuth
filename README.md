@@ -24,7 +24,7 @@ bare guess.
 | **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
 | **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
 | **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
-| **Street match** (Mapillary) | Nearby street-level imagery to visually confirm the guess | pivot / corroboration |
+| **Street match** (Mapillary / KartaView) | Nearby street-level imagery to visually confirm the guess | pivot / corroboration |
 | **Reverse-search pivots** | Ready-to-open Yandex/Lens/Bing/TinEye upload links | manual next step |
 
 The pipeline runs stages in priority order (cheap & deterministic first):
@@ -164,17 +164,16 @@ as the answer.
 | **1 — done** | EXIF → Nominatim, OCR → language hint, confidence engine, CLI | the reliable core |
 | **2 — done** | ML geo-estimation via GeoCLIP (image → coordinates, local inference) | the real no-metadata workhorse; needs a few GB RAM, GPU ideal |
 | **3 — done** | Solar/timezone consistency (pysolar), climate-zone descriptor, OSM cross-ref (Overpass) | corroboration layer |
-| **4 — done** | Reverse-search pivots (Yandex/Lens/Bing/TinEye), street matching (Mapillary), license-plate region | best-effort; keyed APIs gated behind env vars |
+| **4 — done** | Reverse-search pivots (Yandex/Lens/Bing/TinEye), street matching (Mapillary + keyless KartaView), license-plate region | best-effort; keyed APIs gated behind env vars |
 
 ### What's intentionally left for later / needs your input
 
 | Item | Why it's not automatic | To enable |
 |------|------------------------|-----------|
-| **Mapillary street matching** | needs a free API token | set `MAPILLARY_TOKEN` (see [dashboard](https://www.mapillary.com/dashboard/developers)) |
+| **Mapillary street matching** | better global coverage, needs a free API token | set `MAPILLARY_TOKEN` (see [dashboard](https://www.mapillary.com/dashboard/developers)); without it, street matching still works via keyless **KartaView** (sparser outside Europe) |
 | **Automated reverse image search** | Yandex/Lens fight scraping; TinEye API is paid. We do **not** scrape or bypass CAPTCHAs | use the printed pivot links to search manually, or add a keyed TinEye/Bing client later |
 | **Flora → region from the image** | needs a plant-ID vision model | Phase 3 currently describes climate from the *candidate* coordinate instead |
 | **Shadow-angle → latitude** | needs CV shadow detection in the image | Phase 3 currently does the metadata-side solar check instead |
-| **KartaView street match** | keyless alternative to Mapillary | future add alongside `street_match.py` |
 
 The pipeline (`geolocator/pipeline.py`) defines every stage in `STAGES` — adding
 a new signal means writing one function and slotting it in.
@@ -185,7 +184,7 @@ a new signal means writing one function and slotting it in.
 
 | Variable | Effect |
 |----------|--------|
-| `MAPILLARY_TOKEN` | enables the Mapillary street-matching stage |
+| `MAPILLARY_TOKEN` | prefers Mapillary for street matching (better coverage); without it, keyless KartaView is used |
 | `NO_COLOR` | disables ANSI colour in the terminal report |
 
 ## Project layout
@@ -208,9 +207,9 @@ geolocator/
   # Phase 4 — best-effort external
   plates.py         license-plate format → country hint
   reverse_search.py reverse-image-search pivot links
-  street_match.py   Mapillary street-level imagery (env token)
+  street_match.py   Mapillary (token) + KartaView (keyless) street imagery
 tests/
-  test_pipeline.py  35 offline tests (no network / binaries needed)
+  test_pipeline.py  37 offline tests (no network / binaries needed)
 ```
 
 ---

@@ -255,31 +255,35 @@ def stage_landmark_model(result: GeoResult) -> None:  # Phase 2 (GeoCLIP)
     )
 
 
-def stage_street_match(result: GeoResult) -> None:  # Phase 4 (Mapillary)
-    """Corroborate the candidate with nearby street-level imagery coverage."""
+def stage_street_match(result: GeoResult) -> None:  # Phase 4 (Mapillary / KartaView)
+    """Corroborate the candidate with nearby street-level imagery coverage.
+
+    Enrichment only (corroborating=False): imagery existing near a coordinate
+    doesn't prove *this* photo was taken there — a human must visually compare.
+    """
     coord = _current_best_coord(result)
     if coord is None:
         return
 
-    res = street_match_mod.nearby(coord)
-    if not res.available:
-        result.note(f"Street matching skipped: {res.reason}")
-        return
-    if not res.images:
-        result.note("Street matching: no Mapillary imagery near the candidate.")
+    res = street_match_mod.find_street_imagery(coord)
+    if not res.available or not res.images:
+        result.note(f"Street matching: no imagery near the candidate ({res.reason}).")
         return
 
+    provider = res.images[0].provider
     result.add(
         Signal(
             source="street_match",
             description=(
-                f"{len(res.images)} Mapillary street-level image(s) near the "
+                f"{len(res.images)} {provider} street-level image(s) near the "
                 f"candidate — open to visually confirm the match"
             ),
             confidence=0.20,
             precision=Precision.CITY,
             coordinates=coord,
+            corroborating=False,  # imagery existing != this photo taken here
             evidence={
+                "provider": provider,
                 "count": len(res.images),
                 "viewer_urls": [img.viewer_url for img in res.images],
             },
