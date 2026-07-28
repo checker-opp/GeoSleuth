@@ -5,11 +5,39 @@ runs a layered pipeline of location signals and returns a best-guess location,
 a **confidence score**, and the **evidence trail** that produced it — never a
 bare guess.
 
-> **Scope of this release (Phase 1):** the reliable core — EXIF GPS extraction,
-> Nominatim reverse geocoding, and OCR-based language/text hinting. The heavier
-> layers (ML geo-estimation, reverse image search, street matching, shadow &
-> flora cross-referencing) are scaffolded and land in later phases — see
+> **Status:** all four phases are built and tested — EXIF → geocoding, OCR,
+> GeoCLIP ML estimation, and corroboration + best-effort lookups. See the
 > [Roadmap](#roadmap).
+
+---
+
+## Quickstart
+
+```bash
+# 1. Clone the repo
+git clone <your-repo-url> geolocator
+cd geolocator
+
+# 2. (recommended) create a virtual environment — needs Python 3.9+
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# 3. Install core + the ML engine (GeoCLIP) that locates no-metadata photos
+pip install -r requirements.txt -r requirements-ml.txt
+
+# 4. (recommended) install the OCR engine
+#    Windows:
+winget install UB-Mannheim.TesseractOCR
+#    macOS:  brew install tesseract      Debian/Ubuntu:  sudo apt install tesseract-ocr
+
+# 5. Run it
+python -m geolocator path/to/photo.jpg
+```
+
+> ⏱ **First-time setup ≈ 15–20 min**, almost all of it the one-time `torch`
+> install and a **~1.7 GB GeoCLIP model download on the first run**. After that
+> it's **~30–90 s per image on CPU** (much less in batch, near-instant on GPU).
+> Full breakdown in [Requirements & setup time](#requirements--expected-setup-time).
 
 ---
 
@@ -45,47 +73,68 @@ EXIF → reverse-search pivots → OCR+plates → GeoCLIP → [StreetCLIP] → O
 
 ## Install
 
+**Prerequisite:** Python **3.9+** (`python --version`).
+
+### 1. Core (always)
+
 ```bash
 pip install -r requirements.txt
 ```
 
-Or install as a command (`geolocate`):
+This alone gives you the reliable core: EXIF GPS → Nominatim reverse geocoding.
+Optionally install it as a `geolocate` command:
 
 ```bash
 pip install -e .
 ```
 
-### Optional external tools (strongly recommended)
+### 2. ML engine — GeoCLIP (the no-metadata workhorse)
 
-Two signals depend on external binaries. The tool **auto-detects** them and
-degrades gracefully if they're missing — but installing them unlocks a lot.
-
-| Tool | Enables | Windows install |
-|------|---------|-----------------|
-| **ExifTool** | Comprehensive EXIF (RAW/HEIC/XMP), the most robust GPS extraction | Download from [exiftool.org](https://exiftool.org), rename `exiftool(-k).exe` → `exiftool.exe`, put it on your `PATH` |
-| **Tesseract** | OCR (the entire text/language signal) | Install the [UB-Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki), then add its folder to `PATH` |
-
-Without ExifTool, EXIF still works via the pure-Python `exifread`/Pillow
-fallback. Without Tesseract, OCR is skipped (the tool tells you so).
-
-### ML geo-estimation (Phase 2 — optional, heavy)
-
-The GeoCLIP visual estimator is the thing that actually locates images with no
-metadata. It's a large dependency (torch), kept in a separate requirements file
-so the core stays lightweight:
+Most photos have their GPS stripped; GeoCLIP is what actually locates them from
+pixels. It pulls in `torch`, kept in a separate requirements file so the core
+stays lightweight:
 
 ```bash
 pip install -r requirements.txt -r requirements-ml.txt
 ```
 
-Notes:
-- **torch** is ~200 MB to download / ~2 GB installed; the pinned CPU build runs
-  anywhere. For GPU, install the CUDA torch build from pytorch.org instead.
-- **GeoCLIP** downloads its model weights (~hundreds of MB) on first run, then
-  caches them.
-- `transformers` is pinned to `<5` — GeoCLIP's encoder targets the 4.x CLIP API
-  and 5.x breaks inference.
-- With the extras absent, the ML stage is skipped gracefully (the tool says so).
+- **torch** — ~200 MB download / ~2 GB installed; the pinned CPU build runs
+  anywhere. For GPU, install the CUDA torch build from [pytorch.org](https://pytorch.org) instead.
+- **GeoCLIP** downloads its model weights (**~1.7 GB**, CLIP-ViT-L/14) on the
+  **first run**, then caches them under `~/.cache/huggingface`.
+- `transformers` is pinned `<5` — GeoCLIP's encoder targets the 4.x CLIP API and
+  5.x breaks inference.
+- Without these extras the ML stage is skipped gracefully (the tool says so).
+
+### 3. External binaries (recommended)
+
+Auto-detected; the tool degrades gracefully if they're missing.
+
+| Tool | Enables | Install |
+|------|---------|---------|
+| **Tesseract** | OCR (text / language / plate signals) | Windows: `winget install UB-Mannheim.TesseractOCR` · macOS: `brew install tesseract` · Linux: `apt install tesseract-ocr` |
+| **ExifTool** | Comprehensive EXIF (RAW/HEIC/XMP) | Windows: download from [exiftool.org](https://exiftool.org), rename `exiftool(-k).exe`→`exiftool.exe` onto `PATH` · macOS: `brew install exiftool` · Linux: `apt install libimage-exiftool-perl` |
+
+> On Windows the tool **auto-detects Tesseract** at `C:\Program Files\Tesseract-OCR`,
+> so the `winget` install works with no `PATH` editing. Without Tesseract, OCR is
+> skipped; without ExifTool, EXIF still works via the pure-Python `exifread`/Pillow
+> fallback.
+
+### Requirements & expected setup time
+
+| Step | Download | Approx time |
+|------|----------|-------------|
+| Core deps (`requirements.txt`) | ~30 MB | ~1 min |
+| ML deps — torch + transformers + geoclip | ~250 MB | ~3–5 min |
+| Tesseract binary (optional) | ~50 MB | ~1–2 min |
+| **First GeoCLIP run** — downloads CLIP-ViT-L/14 | **~1.7 GB** | ~8–12 min |
+| *(optional)* StreetCLIP first run — 2nd model | ~1.6 GB | ~8–12 min |
+
+**Total to first result ≈ 15–20 min** (without StreetCLIP), dominated by the
+torch install and the one-time ~1.7 GB model download; figures assume a
+~30 Mbps connection. **Steady state: ~30–90 s per image on CPU** — mostly the
+model loading from disk — and only ~5–15 s each for later images in a **batch**
+(the model loads once). A GPU makes inference near-instant.
 
 ---
 
