@@ -272,6 +272,19 @@ python -m geolocator.webui   # → http://127.0.0.1:5000
   a **Download** button fetches the weights and shows live progress, then enables
   the matching toggle. Binds to localhost only.
 
+> **The UI downloads model *weights*, not Python packages.** The local models
+> need `torch`/`geoclip`/`transformers` — installed once with `pip install .[clip]`,
+> **not** by the UI (auto-installing a 2 GB package into a live server is fragile,
+> and it wouldn't be importable without a restart). So on a **base / GeoSeer-only
+> install**, the panel shows *"needs packages — `pip install .[clip]`"* instead of
+> a Download button. After you install `.[clip]` and restart the UI, the Download
+> button appears and pulls the weights.
+>
+> **GeoCLIP and StreetCLIP share the same `.[clip]` packages** (StreetCLIP needs
+> only `torch`+`transformers`, no separate pip install) but are **two separate
+> weight downloads** — GeoCLIP ~1.7 GB (on by default), StreetCLIP ~1.6 GB
+> (opt-in). Each has its own Download button; they're never fetched together.
+
 ### Customize the query (choose which signals run)
 
 Toggle any signal, and pass keys inline. A **GeoSeer-only** mode skips the heavy
