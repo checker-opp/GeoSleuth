@@ -274,17 +274,16 @@ def streetclip_enabled() -> bool:
 
 
 def stage_second_model(result: GeoResult) -> None:  # optional StreetCLIP cross-check
-    """Independent second opinion on the country via StreetCLIP.
+    """Run the StreetCLIP second opinion and stash its country verdict.
 
-    Opt-in (GEOLOCATOR_STREETCLIP=1) because the model is large and slow on CPU.
-    When it AGREES with the visual (GeoCLIP) country, that's genuine
-    cross-model corroboration and boosts confidence; a disagreement is surfaced
-    as a caution rather than silently ignored.
+    Opt-in (GEOLOCATOR_STREETCLIP=1) because the model is large. This stage only
+    *records* the verdict (as evidence + meta); the ``resolve_models`` stage
+    later decides how it interacts with the GeoCLIP guess (boost / re-rank /
+    override / down-weight).
     """
     if not streetclip_enabled():
         return
 
-    # Compare against the current best locating guess's country, if we have one.
     best = max(
         (s for s in result.signals if s.locating and s.place),
         key=lambda s: (precision_rank(s.precision), s.confidence),
@@ -300,44 +299,19 @@ def stage_second_model(result: GeoResult) -> None:  # optional StreetCLIP cross-
         result.note("StreetCLIP second opinion unavailable (ML extras/weights).")
         return
 
-    agrees = (
-        geoclip_country is not None
-        and pred.country.lower() in geoclip_country.lower()
+    result.meta["streetclip"] = {"country": pred.country, "score": round(pred.score, 3)}
+    result.add(
+        Signal(
+            source="streetclip",
+            description=f"StreetCLIP country estimate: {pred.country} (p={pred.score:.2f})",
+            confidence=round(pred.score, 3),
+            precision=Precision.COUNTRY,
+            locating=False,          # evidence unless resolve_models promotes it
+            corroborating=False,     # resolve_models flips this on agreement
+            evidence={"country": pred.country, "score": round(pred.score, 3),
+                      "candidate_countries": [pred.country]},
+        )
     )
-    if agrees:
-        result.add(
-            Signal(
-                source="streetclip",
-                description=f"StreetCLIP independently agrees on {pred.country} "
-                f"(p={pred.score:.2f}) — cross-model corroboration",
-                confidence=0.40,
-                precision=Precision.COUNTRY,
-                corroborating=True,
-                evidence={"country": pred.country, "score": round(pred.score, 3),
-                          "candidate_countries": [pred.country]},
-            )
-        )
-    else:
-        result.add(
-            Signal(
-                source="streetclip",
-                description=f"StreetCLIP's top country is {pred.country} "
-                f"(p={pred.score:.2f})"
-                + (f", differing from the visual estimate ({geoclip_country})"
-                   if geoclip_country else ""),
-                confidence=0.30,
-                precision=Precision.COUNTRY,
-                # An independent locator: if there's no GeoCLIP guess it can even
-                # stand in; if it disagrees it's shown but not treated as agreement.
-                corroborating=False,
-                evidence={"country": pred.country, "score": round(pred.score, 3)},
-            )
-        )
-        if geoclip_country:
-            result.note(
-                f"Model disagreement: GeoCLIP→{geoclip_country}, "
-                f"StreetCLIP→{pred.country}. Treat the country as uncertain."
-            )
 
 
 def _country_of(place: str) -> Optional[str]:
@@ -346,6 +320,114 @@ def _country_of(place: str) -> Optional[str]:
         return None
     parts = [p.strip() for p in place.split(",") if p.strip()]
     return parts[-1] if parts else None
+
+
+# StreetCLIP must be at least this confident to override GeoCLIP on disagreement.
+_OVERRIDE_MIN_SCORE = 0.40
+
+
+def stage_resolve_models(result: GeoResult) -> None:
+    """Reconcile GeoCLIP and the StreetCLIP second opinion.
+
+    On **agreement** the StreetCLIP signal becomes corroborating (boosts
+    confidence). On **disagreement** — where GeoCLIP has been observed to be
+    *confidently wrong* (e.g. a glass CBD → the wrong continent) — we, in order:
+
+      1. **Re-rank:** if any of GeoCLIP's own top-5 predictions is in the country
+         StreetCLIP votes for, promote that one (keeps coordinate precision).
+      2. **Country-override:** otherwise report StreetCLIP's country at
+         country-level, demoting GeoCLIP's contradicted coordinates to evidence.
+      3. **Down-weight:** always cut confidence when the two models disagree.
+
+    Never overrides an exact EXIF GPS fix.
+    """
+    sc = result.meta.get("streetclip")
+    if not sc:
+        return
+    sc_country, sc_score = sc["country"], sc["score"]
+
+    ml = max(
+        (s for s in result.signals if s.locating and s.place),
+        key=lambda s: (precision_rank(s.precision), s.confidence),
+        default=None,
+    )
+    sc_signal = next((s for s in result.signals if s.source == "streetclip"), None)
+
+    # No visual guess to compare against, or an exact GPS fix we trust — stand down.
+    if ml is None:
+        return
+    if ml.precision == Precision.EXACT:
+        return
+
+    ml_country = _country_of(ml.place)
+    agrees = ml_country and sc_country.lower() in ml_country.lower()
+
+    if agrees:
+        if sc_signal is not None:
+            sc_signal.corroborating = True
+            sc_signal.description = (
+                f"StreetCLIP independently agrees on {sc_country} "
+                f"(p={sc_score:.2f}) — cross-model corroboration"
+            )
+        return
+
+    # --- Disagreement ---
+    result.note(
+        f"Model disagreement: GeoCLIP→{ml_country}, StreetCLIP→{sc_country} "
+        f"(p={sc_score:.2f})."
+    )
+    result.meta["disagreement_penalty"] = True
+
+    if sc_score < _OVERRIDE_MIN_SCORE:
+        return  # too weak to override; the down-weight in _aggregate is enough
+
+    # 1) Re-rank: look for a top-5 GeoCLIP prediction in StreetCLIP's country.
+    topk = (ml.evidence or {}).get("top_k", [])
+    for p in topk[1:]:  # skip #1 (that's the contradicted ml pick)
+        pl = geocode_mod.reverse(Coordinates(p["lat"], p["lon"]))
+        if pl and pl.country and sc_country.lower() in pl.country.lower():
+            ml.locating = False       # demote the contradicted top pick
+            ml.corroborating = False  # ...and it must not corroborate its replacement
+            result.add(
+                Signal(
+                    source="resolved",
+                    description=f"Re-ranked to a StreetCLIP-consistent GeoCLIP "
+                    f"prediction → {pl.display_name}",
+                    confidence=0.40,
+                    precision=Precision.REGION,
+                    coordinates=Coordinates(p["lat"], p["lon"]),
+                    place=pl.display_name,
+                    locating=True,
+                    evidence={"reason": "rerank", "agreed_country": sc_country},
+                )
+            )
+            result.note(
+                "Re-ranked: GeoCLIP's top pick contradicted StreetCLIP, so a "
+                "lower-ranked GeoCLIP prediction in the agreed country was used."
+            )
+            return
+
+    # 2) Country-override: no GeoCLIP prediction matches → trust StreetCLIP's country.
+    ml.locating = False
+    ml.corroborating = False
+    result.add(
+        Signal(
+            source="resolved",
+            description=f"Models disagree and no GeoCLIP prediction matches; "
+            f"reporting StreetCLIP's country: {sc_country}",
+            confidence=0.30,
+            precision=Precision.COUNTRY,
+            coordinates=None,
+            place=sc_country,
+            locating=True,
+            evidence={"reason": "country_override", "geoclip_country": ml_country,
+                      "streetclip_country": sc_country, "streetclip_score": sc_score},
+        )
+    )
+    result.note(
+        f"GeoCLIP's predictions all contradict StreetCLIP; falling back to "
+        f"StreetCLIP's country ({sc_country}) at country-level."
+    )
 
 
 def stage_place_lookup(result: GeoResult) -> None:  # OCR text -> Nominatim search
@@ -571,6 +653,7 @@ STAGES = [
     ("landmark_model", stage_landmark_model),
     ("second_model", stage_second_model),
     ("place_lookup", stage_place_lookup),
+    ("resolve_models", stage_resolve_models),
     ("street_match", stage_street_match),
     ("osm_crossref", stage_osm_crossref),
     ("shadow_flora", stage_shadow_flora),
@@ -634,6 +717,11 @@ def _aggregate(result: GeoResult) -> None:
     if others and best.precision != Precision.EXACT:
         bonus = min(0.15, 0.05 * len(others))
         confidence = min(0.85, confidence + bonus)
+
+    # Down-weight when a second model disagreed but we didn't override (weak
+    # disagreement) — the winner is contradicted, so it must not read confident.
+    if result.meta.get("disagreement_penalty") and best.source != "resolved":
+        confidence *= 0.6
 
     result.overall_confidence = confidence
 

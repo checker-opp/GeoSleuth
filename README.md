@@ -103,7 +103,7 @@ Every result ships with its **confidence** and **evidence trail** — never a ba
 | **OCR** (Tesseract) | Visible text → detected language → candidate countries | ★★☆ coarse hint |
 | **ML estimate** (GeoCLIP) | Predicted coordinates from visual content alone — the no-metadata workhorse | ★★★☆ on distinctive scenes, honestly low on generic/indoor |
 | **OCR place lookup** | A business/place name OCR reads, geocoded and cross-checked against the visual estimate | ★★★★ when it matches — turns a sign into coordinates |
-| **StreetCLIP** (opt-in) | Independent 2nd model's country vote; boosts confidence when it agrees with GeoCLIP | cross-model corroboration (validated: Karachi→Pakistan) |
+| **StreetCLIP** (opt-in) | Independent 2nd model's country vote; agrees→boost, disagrees→re-rank/override GeoCLIP | cross-model corroboration + **error correction** |
 | **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
 | **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
 | **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
@@ -258,6 +258,11 @@ it is (`exact` / `city` / `region` / `country` / `unknown`).
   a photo was *edited* rather than shot.
 - The solar stage can **lower** trust: a timezone offset inconsistent with the
   candidate longitude is flagged as a warning.
+- **Model disagreement lowers trust too.** When the optional StreetCLIP second
+  model contradicts GeoCLIP's country, confidence is cut and the guess is
+  re-ranked or overridden toward the agreed country — the tool won't keep
+  presenting a confident-but-contradicted location (see the StreetCLIP note in
+  [Install](#3-external-binaries-recommended)).
 
 This transparency is deliberate — for OSINT work, the reasoning matters as much
 as the answer.
@@ -310,9 +315,20 @@ a new signal means writing one function and slotting it in.
 > CLIP-ViT-L/14). The **first run downloads the weights (~1.6 GB, one-time)**;
 > after that it's practical even on CPU (~27 s to load + ~3 s per image in
 > testing). It's **off by default** because of that large download and the
-> per-run load cost — enable it when you want a second opinion. Validated on a
-> Karachi street scene: StreetCLIP returned *Pakistan* at p≈1.00, agreeing with
-> GeoCLIP and nudging confidence up.
+> per-run load cost — but it measurably improves the hard cases.
+>
+> **What it does on disagreement.** When StreetCLIP's country differs from
+> GeoCLIP's guess, the tool resolves it in order: **(1) re-rank** — if any of
+> GeoCLIP's own top-5 predictions is in StreetCLIP's country, promote that one
+> (keeps coordinates); **(2) country-override** — otherwise report StreetCLIP's
+> country at country-level and demote GeoCLIP's contradicted coordinates to
+> evidence; **(3) down-weight** — always cut confidence on disagreement. It never
+> overrides an exact EXIF GPS fix.
+>
+> **Measured effect** (test photos with no metadata): GeoCLIP alone mislabeled a
+> Jakarta CBD as *Mexico City* (60%) and a Jakarta street as *Taiwan*; with
+> StreetCLIP on, both correctly resolved to **Indonesia** (country-level, honest
+> ~30%), while a correctly-placed Bali temple was *boosted*, not changed.
 
 ## Project layout
 
@@ -337,7 +353,7 @@ geolocator/
   reverse_search.py reverse-image-search pivot links
   street_match.py   Mapillary (token) + KartaView (keyless) street imagery
 tests/
-  test_pipeline.py  44 offline tests (no network / binaries needed)
+  test_pipeline.py  50 offline tests (no network / binaries needed)
 ```
 
 ---

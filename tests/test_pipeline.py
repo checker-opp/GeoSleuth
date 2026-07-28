@@ -406,6 +406,92 @@ def test_expand_inputs_dir_and_missing(tmp_path):
     assert any("not found" in e for e in errors)
 
 
+# --- model disagreement resolution (StreetCLIP vs GeoCLIP) ----------------- #
+def _disagreement_result(topk, ml_place="Reforma, Mexico City, Mexico",
+                         sc_country="Indonesia", sc_score=0.78):
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("ml_geoclip", "geo", 0.60, Precision.CITY,
+                 coordinates=Coordinates(topk[0]["lat"], topk[0]["lon"]),
+                 place=ml_place, corroborating=True, evidence={"top_k": topk}))
+    r.add(Signal("streetclip", "sc", sc_score, Precision.COUNTRY, locating=False,
+                 evidence={"country": sc_country, "score": sc_score,
+                           "candidate_countries": [sc_country]}))
+    r.meta["streetclip"] = {"country": sc_country, "score": sc_score}
+    return r
+
+
+def test_resolve_country_override(monkeypatch):
+    from geolocator import geocode as geocode_mod
+    from geolocator.geocode import Place
+    topk = [{"lat": 19.4, "lon": -99.1, "prob": 0.2},
+            {"lat": 19.4, "lon": -99.2, "prob": 0.2}]
+    r = _disagreement_result(topk)
+    # every GeoCLIP point reverse-geocodes to Mexico -> no re-rank match
+    monkeypatch.setattr(geocode_mod, "reverse",
+                        lambda c, **k: Place(display_name="X, Mexico", country="Mexico"))
+    pipeline.stage_resolve_models(r)
+    pipeline._aggregate(r)
+    assert r.best_place == "Indonesia"           # override to StreetCLIP country
+    assert r.best_precision == Precision.COUNTRY
+    assert r.best_coordinates is None
+    assert round(r.overall_confidence, 2) == 0.30
+    assert any(s.source == "ml_geoclip" and not s.locating for s in r.signals)  # demoted
+
+
+def test_resolve_rerank_keeps_precision(monkeypatch):
+    from geolocator import geocode as geocode_mod
+    from geolocator.geocode import Place
+    # top pick Mexico, but #2 is an Indonesian prediction
+    topk = [{"lat": 19.4, "lon": -99.1, "prob": 0.2},
+            {"lat": -6.2, "lon": 106.8, "prob": 0.18}]
+
+    def fake_reverse(c, **k):
+        if -11 <= c.lat <= 6:  # Indonesia latitudes
+            return Place(display_name="Jakarta, Indonesia", country="Indonesia")
+        return Place(display_name="X, Mexico", country="Mexico")
+
+    r = _disagreement_result(topk)
+    monkeypatch.setattr(geocode_mod, "reverse", fake_reverse)
+    pipeline.stage_resolve_models(r)
+    pipeline._aggregate(r)
+    assert r.best_precision == Precision.REGION           # kept a real coordinate
+    assert r.best_coordinates is not None
+    assert "Indonesia" in (r.best_place or "")
+
+
+def test_resolve_agreement_boosts(monkeypatch):
+    from geolocator import geocode as geocode_mod
+    topk = [{"lat": -6.2, "lon": 106.8, "prob": 0.3}]
+    r = _disagreement_result(topk, ml_place="Jakarta, Indonesia", sc_country="Indonesia")
+    pipeline.stage_resolve_models(r)   # agree path doesn't hit the network
+    pipeline._aggregate(r)
+    assert "Indonesia" in (r.best_place or "")
+    assert r.best_precision == Precision.CITY             # GeoCLIP retained
+    assert r.overall_confidence > 0.60                    # corroboration boost
+
+
+def test_resolve_never_overrides_exif():
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("exif", "gps", 0.95, Precision.EXACT,
+                 coordinates=Coordinates(19.4, -99.1), place="Mexico City, Mexico"))
+    r.add(Signal("streetclip", "sc", 0.9, Precision.COUNTRY, locating=False,
+                 evidence={"country": "Indonesia", "score": 0.9}))
+    r.meta["streetclip"] = {"country": "Indonesia", "score": 0.9}
+    pipeline.stage_resolve_models(r)
+    pipeline._aggregate(r)
+    assert r.best_precision == Precision.EXACT
+    assert r.overall_confidence == 0.95                   # GPS untouched
+
+
+def test_resolve_weak_disagreement_downweights_only():
+    topk = [{"lat": 19.4, "lon": -99.1, "prob": 0.2}]
+    r = _disagreement_result(topk, sc_score=0.30)          # below override threshold
+    pipeline.stage_resolve_models(r)
+    pipeline._aggregate(r)
+    assert "Mexico" in (r.best_place or "")                # GeoCLIP kept
+    assert round(r.overall_confidence, 2) == 0.36          # 0.60 * 0.6 down-weight
+
+
 # --- extractor safety ------------------------------------------------------ #
 def test_extract_missing_file_returns_empty_shell():
     data = exif_mod.extract("does_not_exist_12345.jpg")
