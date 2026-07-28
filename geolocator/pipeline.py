@@ -592,10 +592,13 @@ def _aggregate(result: GeoResult) -> None:
         result.best_precision = Precision.UNKNOWN
         return
 
-    # Only *locating* signals may win the location slot — enrichment signals
-    # (OSM/street/climate) describe a candidate but carry no place of their own.
-    locating = [s for s in result.signals if s.locating]
-    pool = locating or result.signals
+    # Only *locating* signals that actually carry a location (coordinates or a
+    # place name) may win the slot. This excludes both enrichment signals and
+    # country-only votes (StreetCLIP agreement, OCR language) — those corroborate
+    # but can't BE the answer, or they'd blank out the place while keeping a high
+    # number. Fall back gracefully if nothing carries a location.
+    located = [s for s in result.signals if s.locating and (s.coordinates or s.place)]
+    pool = located or [s for s in result.signals if s.locating] or result.signals
     # Pick the winning signal: highest precision, then highest confidence.
     best = max(
         pool,

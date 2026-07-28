@@ -107,6 +107,23 @@ def test_enrichment_never_wins_location_slot():
     assert r.overall_confidence == 0.35
 
 
+def test_country_only_locator_cannot_win_slot():
+    # Regression: a country-only locating signal (no coords/place, e.g. a
+    # StreetCLIP agreement vote) with HIGHER confidence must not steal the
+    # location slot from a coordinate-bearing locator — that produced a blank
+    # "best guess" at an inflated confidence.
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("ml_geoclip", "Karachi", 0.35, Precision.COUNTRY,
+                 coordinates=Coordinates(24.86, 67.01), place="Karachi, Pakistan",
+                 corroborating=True))
+    r.add(Signal("streetclip", "Pakistan vote", 0.40, Precision.COUNTRY,
+                 corroborating=True, evidence={"candidate_countries": ["Pakistan"]}))
+    pipeline._aggregate(r)
+    assert r.best_place == "Karachi, Pakistan"   # coord-bearing locator wins
+    assert r.best_coordinates is not None
+    assert round(r.overall_confidence, 2) == 0.40  # 0.35 + one agreeing corroborator
+
+
 def test_enrichment_signals_do_not_boost_confidence():
     # An ML guess plus enrichment-only signals (OSM/street/climate, i.e.
     # corroborating=False) must NOT raise confidence — those fire for any real

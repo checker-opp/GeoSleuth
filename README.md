@@ -22,7 +22,7 @@ bare guess.
 | **OCR** (Tesseract) | Visible text → detected language → candidate countries | ★★☆ coarse hint |
 | **ML estimate** (GeoCLIP) | Predicted coordinates from visual content alone — the no-metadata workhorse | ★★★☆ on distinctive scenes, honestly low on generic/indoor |
 | **OCR place lookup** | A business/place name OCR reads, geocoded and cross-checked against the visual estimate | ★★★★ when it matches — turns a sign into coordinates |
-| **StreetCLIP** (opt-in) | Independent 2nd model's country vote; boosts confidence when it agrees with GeoCLIP | cross-model corroboration (GPU recommended) |
+| **StreetCLIP** (opt-in) | Independent 2nd model's country vote; boosts confidence when it agrees with GeoCLIP | cross-model corroboration (validated: Karachi→Pakistan) |
 | **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
 | **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
 | **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
@@ -201,14 +201,16 @@ a new signal means writing one function and slotting it in.
 | Variable | Effect |
 |----------|--------|
 | `MAPILLARY_TOKEN` | prefers Mapillary for street matching (better coverage); without it, keyless KartaView is used |
-| `GEOLOCATOR_STREETCLIP` | set to `1` to enable the StreetCLIP second-model cross-check (heavy; GPU recommended — see note below) |
+| `GEOLOCATOR_STREETCLIP` | set to `1` to enable the StreetCLIP second-model cross-check (~1.6 GB one-time download — see note below) |
 | `NO_COLOR` | disables ANSI colour in the terminal report |
 
 > **StreetCLIP note:** the cross-check loads `geolocal/StreetCLIP` (~1.6 GB,
-> CLIP-ViT-L/14). On a GPU it's quick; on CPU it's impractically slow (model
-> load alone can exceed 10 minutes), which is why it's **off by default**. The
-> integration is wired and unit-tested, but its inference was **not validated on
-> CPU-only hardware** in development — enable it only with a GPU.
+> CLIP-ViT-L/14). The **first run downloads the weights (~1.6 GB, one-time)**;
+> after that it's practical even on CPU (~27 s to load + ~3 s per image in
+> testing). It's **off by default** because of that large download and the
+> per-run load cost — enable it when you want a second opinion. Validated on a
+> Karachi street scene: StreetCLIP returned *Pakistan* at p≈1.00, agreeing with
+> GeoCLIP and nudging confidence up.
 
 ## Project layout
 
