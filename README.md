@@ -41,6 +41,59 @@ python -m geolocator path/to/photo.jpg
 
 ---
 
+## Demo
+
+Three real runs on photos that have **no GPS metadata** — so the tool guesses
+from pixels alone and reports exactly how sure it is, with the evidence trail.
+Reproduce any of them: `python -m geolocator docs/demo/<image>`.
+
+### 1 · Landmark — Sydney Opera House *(public-domain photo)*
+
+<img src="docs/demo/sydney.jpg" width="380" alt="Sydney Opera House test photo">
+
+![geolocator run on the Sydney photo](docs/demo/shots/sydney.png)
+
+**✅ Sydney, Australia — city-level, 60%.** GeoCLIP's top-5 predictions clustered
+within ~0 km; OSM independently surfaced *Man O' War Steps*, on the Opera House
+forecourt.
+
+### 2 · No-metadata street — Varanasi, India
+
+<img src="docs/demo/varanasi.jpg" width="300" alt="Varanasi ghat test photo">
+
+![geolocator run on the Varanasi photo](docs/demo/shots/varanasi.png)
+
+**✅ Varanasi, India — city-level, 65%.** Pinned the Banaras ghats; OSM
+corroborated with real neighbouring ghats (Ahilyabai, Manmandir, Munshi…), and a
+detected-language hint consistent with India nudged confidence up.
+
+### 3 · Colonial street — Karachi, Pakistan
+
+<img src="docs/demo/karachi.png" width="380" alt="Karachi street test photo">
+
+![geolocator run on the Karachi photo](docs/demo/shots/karachi.png)
+
+**✅ Karachi, Pakistan — country-level, 35%.** The honest case: GeoCLIP's top-5
+spread ~1,000 km, so it reports *country*-level rather than faking a pinpoint —
+the trustworthy part of the answer is **Pakistan**. English shop signs don't
+narrow it further, which is exactly what the reverse-image-search pivots are for.
+
+### Results at a glance
+
+| Photo | Best guess | Truth | Correct? | Confidence |
+|-------|-----------|-------|----------|------------|
+| Sydney | Sydney, NSW, Australia | Sydney | ✅ city | 60% |
+| Varanasi | Varanasi, UP, India | Varanasi | ✅ city | 65% |
+| Karachi | Karachi, Sindh, Pakistan | Karachi | ✅ country | 35% |
+
+Every result ships with its **confidence** and **evidence trail** — never a bare pin.
+
+> Screenshots are captured from real runs (`docs/demo/shots/`). Confidence
+> honestly tracks how sure the model is: tight prediction clusters read higher,
+> a wide spread reads lower.
+
+---
+
 ## What it does today
 
 | Signal | What it gives you | Reliability |

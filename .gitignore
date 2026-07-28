@@ -11,5 +11,8 @@ env/
 *.jpg
 *.jpeg
 *.png
+# Demo/doc assets are meant to be committed.
 !docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
 .DS_Store
