@@ -5,6 +5,7 @@ requests>=2.31.0        # Nominatim reverse geocoding
 pytesseract>=0.3.10     # OCR wrapper (needs Tesseract binary installed)
 langdetect>=1.0.9       # detected text -> language -> country hint
 pysolar>=0.11           # sun position for solar-consistency corroboration
+flask>=3.0.0            # local web UI (geolocate-ui)
 Flask>=3.0              # optional local web UI (python -m geolocator.webui)
 
 # Optional external binaries (auto-detected if on PATH, not pip-installable):

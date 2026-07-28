@@ -15,20 +15,16 @@ dependencies = [
     "pytesseract>=0.3.10",
     "langdetect>=1.0.9",
     "pysolar>=0.11",
+    "flask>=3.0.0",          # web UI ships in every install (tiny; unlike torch)
 ]
 
-# Install profiles:
-#   pip install .            -> API-only (GeoSeer + OCR + geocoding; no downloads)
-#   pip install .[clip]      -> local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
-#   pip install .[web]       -> the browser UI
-#   pip install .[all]       -> everything
+# Install profiles — the ONLY optional part is the heavy local-model stack:
+#   pip install .            -> CLI + Web UI + API locators (GeoSeer); no torch, no downloads
+#   pip install .[clip]      -> also local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
+#   pip install .[all]       -> same as [clip] (alias)
 [project.optional-dependencies]
 clip = ["torch>=2.0.0", "geoclip>=1.2.0", "transformers>=4.40,<5"]
-web = ["flask>=3.0.0"]
-all = [
-    "torch>=2.0.0", "geoclip>=1.2.0", "transformers>=4.40,<5",
-    "flask>=3.0.0",
-]
+all = ["torch>=2.0.0", "geoclip>=1.2.0", "transformers>=4.40,<5"]
 
 [project.scripts]
 geolocate = "geolocator.cli:main"

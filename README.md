@@ -145,22 +145,20 @@ pip install -e .
 
 ### Install profiles — pick how heavy you want it
 
-The tool works three ways; choose at install time:
+The **CLI and the web UI ship in every install** — the only optional part is the
+heavy local-model stack:
 
 ```bash
-pip install .            # API-only  — GeoSeer + OCR + geocoding, ZERO downloads
-pip install .[clip]      # + local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
-pip install .[web]       # + the browser UI
-pip install .[all]       # everything
+pip install .            # CLI + Web UI + API locators (GeoSeer); no torch, no downloads
+pip install .[clip]      # also local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
 ```
 
-- **API-only** (`pip install .`) needs no `torch` and downloads no model weights —
-  it locates via the **GeoSeer API** (free ~10/day) plus OCR/geocoding. Ideal for
-  a lightweight box. Run it with `--geoseer-only`.
-- **Local** (`.[clip]`) adds GeoCLIP so you're not capped by an API quota — at the
-  cost of a `torch` install (~2 GB) and a one-time ~1.7 GB model download.
-- The **web UI** (`.[web]`) can even download the local models for you, with a
-  progress bar — see [Web UI](#web-ui).
+- **Base** (`pip install .`) needs no `torch` and downloads no model weights — it
+  locates via the **GeoSeer API** (free ~10/day) plus OCR/geocoding, and the web
+  UI works out of the box. Run it with `--geoseer-only`.
+- **`.[clip]`** adds GeoCLIP so you're not capped by an API quota — at the cost of
+  a `torch` install (~2 GB) and a one-time ~1.7 GB model download. Or skip this and
+  let the **web UI download the models for you** with a progress bar — see [Web UI](#web-ui).
 
 ### 2. ML engine — GeoCLIP (the no-metadata workhorse)
 
@@ -252,11 +250,14 @@ Every signal has a `--x` / `--no-x` flag (`--geoclip`, `--geoseer`, `--streetcli
 
 A local browser app to upload an image, paste API keys, tick exactly which
 signals to run, and **download the local models with a progress bar** (then tick
-them to use):
+them to use). It ships in the base install — no extra needed:
 
 ```bash
-pip install .[web]
+pip install -e .             # or: pip install .
 geolocate-ui                 # → http://127.0.0.1:5000
+
+# ...or without installing the package (run from the source folder):
+python -m geolocator.webui   # → http://127.0.0.1:5000
 ```
 
 - Enter your **GeoSeer**/**Mapillary** keys in the form (kept in memory, never saved).
