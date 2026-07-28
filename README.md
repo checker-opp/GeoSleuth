@@ -15,29 +15,34 @@ bare guess.
 
 ```bash
 # 1. Clone the repo
-git clone <your-repo-url> geolocator
-cd geolocator
+git clone <your-repo-url> geosleuth
+cd geosleuth
 
 # 2. (recommended) create a virtual environment — needs Python 3.9+
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-# 3. Install core + the ML engine (GeoCLIP) that locates no-metadata photos
-pip install -r requirements.txt -r requirements-ml.txt
+# 3. Install. Base = CLI + Web UI + GeoSeer API locator (no torch, no downloads):
+pip install -e .
+#    Want offline / local ML (GeoCLIP + StreetCLIP)? add the CLIP models (~3 GB):
+#    pip install -e ".[clip]"
 
 # 4. (recommended) install the OCR engine
-#    Windows:
-winget install UB-Mannheim.TesseractOCR
+winget install UB-Mannheim.TesseractOCR                 # Windows
 #    macOS:  brew install tesseract      Debian/Ubuntu:  sudo apt install tesseract-ocr
 
-# 5. Run it
-python -m geolocator path/to/photo.jpg
+# 5. Run it — command line, or the browser UI
+python -m geolocator path/to/photo.jpg     # CLI (or:  geolocate path/to/photo.jpg)
+geolocate-ui                               # Web UI → http://127.0.0.1:5000
 ```
 
-> ⏱ **First-time setup ≈ 15–20 min**, almost all of it the one-time `torch`
-> install and a **~1.7 GB GeoCLIP model download on the first run**. After that
-> it's **~30–90 s per image on CPU** (much less in batch, near-instant on GPU).
-> Full breakdown in [Requirements & setup time](#requirements--expected-setup-time).
+> **Which install?** The **base** install is tiny (~2 min, no model downloads) and
+> already includes the web UI. To locate photos with **no GPS metadata** you then
+> need *either* a free **GeoSeer API key** (run with `--geoseer-only`) *or* the
+> local models via `.[clip]` — which adds a ~2 GB `torch` install and a one-time
+> ~1.7 GB model download (~15 min), then runs ~30–90 s per image on CPU. You can
+> also install base now and download the models later from the **web UI**. Full
+> breakdown in [Requirements & setup time](#requirements--expected-setup-time).
 
 ---
 
@@ -196,17 +201,18 @@ Auto-detected; the tool degrades gracefully if they're missing.
 
 | Step | Download | Approx time |
 |------|----------|-------------|
-| Core deps (`requirements.txt`) | ~30 MB | ~1 min |
-| ML deps — torch + transformers + geoclip | ~250 MB | ~3–5 min |
-| Tesseract binary (optional) | ~50 MB | ~1–2 min |
-| **First GeoCLIP run** — downloads CLIP-ViT-L/14 | **~1.7 GB** | ~8–12 min |
+| **Base install** (`pip install .`) — CLI + Web UI + GeoSeer | ~40 MB | **~2 min** |
+| Tesseract binary (optional, OCR) | ~50 MB | ~1–2 min |
+| *`.[clip]`* — torch + transformers + geoclip | ~250 MB | ~3–5 min |
+| *`.[clip]`* first GeoCLIP run — downloads CLIP-ViT-L/14 | ~1.7 GB | ~8–12 min |
 | *(optional)* StreetCLIP first run — 2nd model | ~1.6 GB | ~8–12 min |
 
-**Total to first result ≈ 15–20 min** (without StreetCLIP), dominated by the
-torch install and the one-time ~1.7 GB model download; figures assume a
-~30 Mbps connection. **Steady state: ~30–90 s per image on CPU** — mostly the
-model loading from disk — and only ~5–15 s each for later images in a **batch**
-(the model loads once). A GPU makes inference near-instant.
+**Base → first result ≈ 2 min** (API-only, GeoSeer key needed for no-metadata
+photos). **`.[clip]` → first result ≈ 15–20 min**, dominated by the torch install
+and the one-time ~1.7 GB model download (figures assume ~30 Mbps). **Steady state
+with local models: ~30–90 s per image on CPU** — mostly model load — and ~5–15 s
+each for later images in a **batch** (loads once). GeoSeer/API mode is a few
+seconds per image. A GPU makes local inference near-instant.
 
 ---
 
