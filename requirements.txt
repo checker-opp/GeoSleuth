@@ -1,12 +1,18 @@
-# Phase 1 — reliable core (EXIF + geocoding + OCR)
+# Core (EXIF + geocoding + OCR + web UI)
 Pillow>=10.0.0          # image loading + EXIF fallback
 exifread>=3.0.0         # pure-python EXIF parser (primary when exiftool absent)
-requests>=2.31.0        # Nominatim reverse geocoding
+requests>=2.31.0        # Nominatim / API calls
 pytesseract>=0.3.10     # OCR wrapper (needs Tesseract binary installed)
 langdetect>=1.0.9       # detected text -> language -> country hint
 pysolar>=0.11           # sun position for solar-consistency corroboration
-flask>=3.0.0            # local web UI (geolocate-ui)
-Flask>=3.0              # optional local web UI (python -m geolocator.webui)
+flask>=3.0.0            # local web UI (geolocate-ui / python -m geolocator.webui)
+
+# Local ML models (part of the standard install; GeoCLIP works out of the box).
+# Model *weights* download on first use (GeoCLIP ~1.7 GB). StreetCLIP is opt-in
+# (--streetclip / GEOLOCATOR_STREETCLIP) and downloads its own ~1.6 GB weights.
+torch>=2.0.0            # CPU build works anywhere; for GPU install the CUDA build
+geoclip>=1.2.0          # image -> coordinates
+transformers>=4.40,<5   # StreetCLIP + GeoCLIP backbone (5.x breaks GeoCLIP)
 
 # Optional external binaries (auto-detected if on PATH, not pip-installable):
 #   exiftool  -> most comprehensive EXIF extraction (RAW/HEIC/XMP)

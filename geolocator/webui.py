@@ -81,6 +81,8 @@ PAGE = """
     <fieldset><legend>Signals to run</legend>
       <label style="color:#e6edf3"><input type="checkbox" name="geoseer_only" id="geoseer_only" {% if checks.geoseer_only %}checked{% endif %}>
         <b>GeoSeer-only</b> — skip the local CLIP models (fast, API-based)</label>
+      <label><input type="checkbox" name="full_workflow" {% if checks.full_workflow %}checked{% endif %}>
+        Full workflow — run GeoCLIP even if GeoSeer already returns a confident fix</label>
       <div class="toggles">
         <label><input type="checkbox" name="use_geoseer" {% if checks.use_geoseer %}checked{% endif %}> GeoSeer AI</label>
         <label><input type="checkbox" name="use_geoclip" class="clip" data-model="geoclip" {% if checks.use_geoclip %}checked{% endif %}> GeoCLIP (local)</label>
@@ -200,9 +202,11 @@ def _checks_from_form(form):
     if not form:  # GET: sensible defaults
         return {"use_ocr": True, "use_geoclip": True, "use_geoseer": True,
                 "use_streetclip": False, "use_street_match": True, "use_osm": True,
-                "use_inaturalist": True, "use_solar": True, "geoseer_only": False}
+                "use_inaturalist": True, "use_solar": True, "geoseer_only": False,
+                "full_workflow": False}
     keys = ("use_ocr", "use_geoclip", "use_geoseer", "use_streetclip",
-            "use_street_match", "use_osm", "use_inaturalist", "use_solar", "geoseer_only")
+            "use_street_match", "use_osm", "use_inaturalist", "use_solar",
+            "geoseer_only", "full_workflow")
     return {k: (k in form) for k in keys}
 
 
@@ -217,6 +221,7 @@ def _config_from_form(form) -> AnalyzeConfig:
         use_osm="use_osm" in form,
         use_inaturalist="use_inaturalist" in form,
         use_solar="use_solar" in form,
+        short_circuit_on_geoseer=("full_workflow" not in form),
         geoseer_key=(form.get("geoseer_key") or "").strip() or None,
         mapillary_token=(form.get("mapillary_token") or "").strip() or None,
     )

@@ -133,14 +133,18 @@ class AnalyzeConfig:
     """
 
     use_ocr: bool = True
-    use_geoclip: bool = True          # local CLIP model (~1.7 GB) — skip if using GeoSeer
+    use_geoclip: bool = True          # local CLIP model (weights download on first use)
     use_geoseer: bool = True          # AI API; self-skips if no key is available
-    use_streetclip: bool = False      # heavy 2nd model; off by default
+    use_streetclip: bool = False      # 2nd model; opt-in weights download
     use_place_lookup: bool = True
     use_street_match: bool = True
     use_osm: bool = True
     use_inaturalist: bool = True
     use_solar: bool = True
+
+    # When GeoSeer returns a confident fix, skip the slow local GeoCLIP/StreetCLIP
+    # models — GeoSeer already located it, so there's no need to also run them.
+    short_circuit_on_geoseer: bool = True
 
     geoseer_key: Optional[str] = None       # overrides GEOSEER_API_KEY
     mapillary_token: Optional[str] = None   # overrides MAPILLARY_TOKEN

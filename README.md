@@ -22,10 +22,8 @@ cd geosleuth
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-# 3. Install. Base = CLI + Web UI + GeoSeer API locator (no torch, no downloads):
-pip install -e .
-#    Want offline / local ML (GeoCLIP + StreetCLIP)? add the CLIP models (~3 GB):
-#    pip install -e ".[clip]"
+# 3. Install everything (CLI, Web UI, local GeoCLIP, API locators)
+pip install -e .            # or: pip install -r requirements.txt
 
 # 4. (recommended) install the OCR engine
 winget install UB-Mannheim.TesseractOCR                 # Windows
@@ -36,13 +34,15 @@ python -m geolocator path/to/photo.jpg     # CLI (or:  geolocate path/to/photo.j
 geolocate-ui                               # Web UI → http://127.0.0.1:5000
 ```
 
-> **Which install?** The **base** install is tiny (~2 min, no model downloads) and
-> already includes the web UI. To locate photos with **no GPS metadata** you then
-> need *either* a free **GeoSeer API key** (run with `--geoseer-only`) *or* the
-> local models via `.[clip]` — which adds a ~2 GB `torch` install and a one-time
-> ~1.7 GB model download (~15 min), then runs ~30–90 s per image on CPU. You can
-> also install base now and download the models later from the **web UI**. Full
-> breakdown in [Requirements & setup time](#requirements--expected-setup-time).
+> **One install, everything included.** `torch` + the local **GeoCLIP** model come
+> with it, so no-metadata photos work out of the box. Model *weights* download on
+> first use (GeoCLIP ~1.7 GB); **StreetCLIP** is the only opt-in extra (its ~1.6 GB
+> weights download only if you enable it with `--streetclip`).
+>
+> Add a free **GeoSeer** API key and it becomes the primary locator — and when it
+> returns a confident fix, the slow local GeoCLIP is **skipped automatically**
+> (pass `--full-workflow` to run both). Full timings in
+> [Requirements & setup time](#requirements--expected-setup-time).
 
 ---
 
@@ -120,13 +120,14 @@ Every result ships with its **confidence** and **evidence trail** — never a ba
 The pipeline runs stages in priority order (cheap & deterministic first):
 
 ```
-EXIF → reverse-search pivots → OCR+plates → GeoCLIP → [StreetCLIP] → OCR place lookup
-     → street match → OSM cross-ref → solar/climate
+EXIF → reverse-search pivots → OCR+plates → GeoSeer → GeoCLIP → [StreetCLIP]
+     → OCR place lookup → street match → OSM cross-ref → iNaturalist → solar/climate
 ```
 
 **Layering rules that keep it honest:**
 - The **most precise** signal wins the location; corroboration only nudges confidence, capped so weak hints never impersonate a GPS fix.
-- The **GeoCLIP** stage runs only when there's no exact GPS — no point second-guessing real coordinates — and its confidence comes from how tightly its top-5 guesses cluster (scattered → low-confidence, country-level at best).
+- **GeoSeer runs first** (when its key is set): a confident GeoSeer fix **short-circuits** the slow local GeoCLIP entirely (`--full-workflow` runs both).
+- The **GeoCLIP** stage runs only when there's no exact GPS and GeoSeer didn't already nail it — and its confidence comes from how tightly its top-5 guesses cluster (scattered → low-confidence, country-level at best).
 - The **solar** stage can *contradict* a guess: if the EXIF timezone offset is inconsistent with the candidate longitude, it says so.
 
 ---
@@ -135,55 +136,26 @@ EXIF → reverse-search pivots → OCR+plates → GeoCLIP → [StreetCLIP] → O
 
 **Prerequisite:** Python **3.9+** (`python --version`).
 
-### 1. Core (always)
+### 1. Install (one command, everything included)
 
 ```bash
-pip install -r requirements.txt
+pip install -e .            # or: pip install -r requirements.txt
 ```
 
-This alone gives you the reliable core: EXIF GPS → Nominatim reverse geocoding.
-Optionally install it as a `geolocate` command:
-
-```bash
-pip install -e .
-```
-
-### Install profiles — pick how heavy you want it
-
-The **CLI and the web UI ship in every install** — the only optional part is the
-heavy local-model stack:
-
-```bash
-pip install .            # CLI + Web UI + API locators (GeoSeer); no torch, no downloads
-pip install .[clip]      # also local GeoCLIP / StreetCLIP models (torch, ~3 GB weights)
-```
-
-- **Base** (`pip install .`) needs no `torch` and downloads no model weights — it
-  locates via the **GeoSeer API** (free ~10/day) plus OCR/geocoding, and the web
-  UI works out of the box. Run it with `--geoseer-only`.
-- **`.[clip]`** adds GeoCLIP so you're not capped by an API quota — at the cost of
-  a `torch` install (~2 GB) and a one-time ~1.7 GB model download. Or skip this and
-  let the **web UI download the models for you** with a progress bar — see [Web UI](#web-ui).
-
-### 2. ML engine — GeoCLIP (the no-metadata workhorse)
-
-Most photos have their GPS stripped; GeoCLIP is what actually locates them from
-pixels. It pulls in `torch` (the `[clip]` profile above), kept optional so the
-core stays lightweight:
-
-```bash
-pip install -r requirements.txt -r requirements-ml.txt   # equivalent to .[clip]
-```
+That's the whole thing — CLI, web UI, API locators (GeoSeer), and the local
+**GeoCLIP** model. There are no install profiles to choose between.
 
 - **torch** — ~200 MB download / ~2 GB installed; the pinned CPU build runs
-  anywhere. For GPU, install the CUDA torch build from [pytorch.org](https://pytorch.org) instead.
-- **GeoCLIP** downloads its model weights (**~1.7 GB**, CLIP-ViT-L/14) on the
-  **first run**, then caches them under `~/.cache/huggingface`.
+  anywhere. For GPU, install the CUDA build from [pytorch.org](https://pytorch.org) instead.
+- **GeoCLIP** downloads its weights (**~1.7 GB**, CLIP-ViT-L/14) on the **first
+  run**, then caches them under `~/.cache/huggingface` (or fetch them ahead of
+  time from the [Web UI](#web-ui) with a progress bar).
+- **StreetCLIP** is the only opt-in piece: the packages are already installed,
+  but its ~1.6 GB weights download only when you enable it (`--streetclip`).
 - `transformers` is pinned `<5` — GeoCLIP's encoder targets the 4.x CLIP API and
   5.x breaks inference.
-- Without these extras the ML stage is skipped gracefully (the tool says so).
 
-### 3. External binaries (recommended)
+### 2. External binaries (recommended)
 
 Auto-detected; the tool degrades gracefully if they're missing.
 
@@ -201,18 +173,17 @@ Auto-detected; the tool degrades gracefully if they're missing.
 
 | Step | Download | Approx time |
 |------|----------|-------------|
-| **Base install** (`pip install .`) — CLI + Web UI + GeoSeer | ~40 MB | **~2 min** |
+| `pip install` — core + flask + torch + geoclip + transformers | ~250 MB | ~4–6 min |
 | Tesseract binary (optional, OCR) | ~50 MB | ~1–2 min |
-| *`.[clip]`* — torch + transformers + geoclip | ~250 MB | ~3–5 min |
-| *`.[clip]`* first GeoCLIP run — downloads CLIP-ViT-L/14 | ~1.7 GB | ~8–12 min |
-| *(optional)* StreetCLIP first run — 2nd model | ~1.6 GB | ~8–12 min |
+| First **GeoCLIP** run — downloads CLIP-ViT-L/14 weights | ~1.7 GB | ~8–12 min |
+| *(opt-in)* First **StreetCLIP** run — 2nd model weights | ~1.6 GB | ~8–12 min |
 
-**Base → first result ≈ 2 min** (API-only, GeoSeer key needed for no-metadata
-photos). **`.[clip]` → first result ≈ 15–20 min**, dominated by the torch install
-and the one-time ~1.7 GB model download (figures assume ~30 Mbps). **Steady state
-with local models: ~30–90 s per image on CPU** — mostly model load — and ~5–15 s
-each for later images in a **batch** (loads once). GeoSeer/API mode is a few
-seconds per image. A GPU makes local inference near-instant.
+**Total to first result ≈ 15–20 min**, dominated by the `torch` install and the
+one-time ~1.7 GB GeoCLIP download (figures assume ~30 Mbps). **Steady state with
+local models: ~30–90 s per image on CPU** — mostly model load — and ~5–15 s each
+for later images in a **batch** (loads once). With a **GeoSeer** key the local
+model is short-circuited on a confident fix, so most images resolve in a few
+seconds without loading GeoCLIP at all. A GPU makes local inference near-instant.
 
 ---
 
@@ -238,13 +209,17 @@ geolocate path/to/photo.jpg
 ### Customize the query (choose which signals run)
 
 ```bash
-# API-only — skip the local CLIP models entirely (fast, no downloads)
+# With a GeoSeer key: a confident GeoSeer fix short-circuits the local model.
+python -m geolocator photo.jpg --geoseer-key gsk_...
+
+# Force the local model to run too, even when GeoSeer is confident
+python -m geolocator photo.jpg --geoseer-key gsk_... --full-workflow
+
+# GeoSeer only — never run the local model (fastest; no GeoCLIP load)
 python -m geolocator photo.jpg --geoseer-only --geoseer-key gsk_...
 
-# Full stack — local GeoCLIP + StreetCLIP second opinion
+# Add the StreetCLIP second opinion / turn individual signals off
 python -m geolocator photo.jpg --streetclip
-
-# Turn individual signals off
 python -m geolocator photo.jpg --no-geoclip --no-inaturalist
 ```
 
@@ -272,49 +247,12 @@ python -m geolocator.webui   # → http://127.0.0.1:5000
   a **Download** button fetches the weights and shows live progress, then enables
   the matching toggle. Binds to localhost only.
 
-> **The UI downloads model *weights*, not Python packages.** The local models
-> need `torch`/`geoclip`/`transformers` — installed once with `pip install .[clip]`,
-> **not** by the UI (auto-installing a 2 GB package into a live server is fragile,
-> and it wouldn't be importable without a restart). So on a **base / GeoSeer-only
-> install**, the panel shows *"needs packages — `pip install .[clip]`"* instead of
-> a Download button. After you install `.[clip]` and restart the UI, the Download
-> button appears and pulls the weights.
->
-> **GeoCLIP and StreetCLIP share the same `.[clip]` packages** (StreetCLIP needs
-> only `torch`+`transformers`, no separate pip install) but are **two separate
-> weight downloads** — GeoCLIP ~1.7 GB (on by default), StreetCLIP ~1.6 GB
-> (opt-in). Each has its own Download button; they're never fetched together.
-
-### Customize the query (choose which signals run)
-
-Toggle any signal, and pass keys inline. A **GeoSeer-only** mode skips the heavy
-local CLIP model entirely — fast and API-based:
-
-```bash
-# GeoSeer only (no local ML): fastest, needs the key
-python -m geolocator photo.jpg --geoseer-only --geoseer-key gsk_...
-
-# Turn individual signals on/off
-python -m geolocator photo.jpg --no-geoclip --streetclip
-python -m geolocator photo.jpg --no-ocr --no-inaturalist
-
-# Pass keys instead of env vars
-python -m geolocator photo.jpg --geoseer-key gsk_... --mapillary-token "MLY|..."
-```
-
-Run `python -m geolocator --help` for the full list.
-
-### Web UI
-
-A local web interface to upload an image, paste keys, tick which signals to run
-(including GeoSeer-only), and see the result:
-
-```bash
-python -m geolocator.webui        # then open http://127.0.0.1:5000
-```
-
-Keys entered in the UI are used only for that request and never stored; the
-server binds to localhost only.
+> **The UI downloads model *weights*, not Python packages.** The packages
+> (`torch`/`geoclip`/`transformers`) come with the standard `pip install`, so the
+> Download button just fetches the large weight files with a progress bar.
+> **GeoCLIP and StreetCLIP are two separate downloads** — GeoCLIP ~1.7 GB (used by
+> default), StreetCLIP ~1.6 GB (opt-in). Each has its own button; they're never
+> fetched together.
 
 ### Example (image with GPS metadata)
 
@@ -467,7 +405,7 @@ geolocator/
   webui.py          Flask browser app (keys, toggles, in-UI model downloads)
   modelmgr.py       local-model status + download-with-progress
 tests/
-  test_pipeline.py  62 offline tests (no network / binaries needed)
+  test_pipeline.py  64 offline tests (no network / binaries needed)
 COVERAGE.md         spec → implementation traceability (what shipped / substituted / skipped)
 ```
 

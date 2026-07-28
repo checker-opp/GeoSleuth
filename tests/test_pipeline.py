@@ -614,6 +614,41 @@ def test_webui_config_from_form_geoseer_only():
     assert cfg.use_geoseer is True and cfg.use_ocr is True
 
 
+# --- GeoSeer short-circuit ------------------------------------------------- #
+def test_geoseer_short_circuit_skips_geoclip(monkeypatch):
+    from geolocator import geoestimate as ge
+    r = GeoResult(image_path="x.jpg")
+    r.meta["skip_heavy_models"] = True
+    called = {"n": 0}
+    monkeypatch.setattr(ge, "predict", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    pipeline.stage_landmark_model(r)
+    assert called["n"] == 0     # GeoCLIP not run when GeoSeer already located it
+
+
+def test_geoseer_sets_short_circuit_when_confident(monkeypatch):
+    from geolocator import geoseer as geoseer_mod, geocode as geocode_mod
+    from geolocator.geocode import Place
+    from geolocator.models import AnalyzeConfig
+    fake = geoseer_mod.GeoSeerResult(available=True, requests_remaining=5,
+        locations=[geoseer_mod.GeoSeerLocation(lat=-6.2, lon=106.8,
+                   address="Jakarta", confidence=0.9)])
+    monkeypatch.setattr(geoseer_mod, "predict", lambda p, **k: fake)
+    monkeypatch.setattr(geocode_mod, "reverse", lambda c, **k: Place(display_name="Jakarta, Indonesia"))
+
+    r = GeoResult(image_path="x.jpg")
+    r.meta["geoseer_key"] = "k"
+    r.meta["config"] = AnalyzeConfig()          # short-circuit on by default
+    pipeline.stage_geoseer(r)
+    assert r.meta.get("skip_heavy_models") is True
+
+    # --full-workflow (short_circuit off) must NOT set the skip flag
+    r2 = GeoResult(image_path="x.jpg")
+    r2.meta["geoseer_key"] = "k"
+    r2.meta["config"] = AnalyzeConfig(short_circuit_on_geoseer=False)
+    pipeline.stage_geoseer(r2)
+    assert r2.meta.get("skip_heavy_models") is not True
+
+
 # --- model manager --------------------------------------------------------- #
 def test_modelmgr_unknown_model():
     from geolocator import modelmgr

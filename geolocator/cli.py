@@ -220,6 +220,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="solar/climate corroboration (default on)")
     sig.add_argument("--geoseer-only", action="store_true",
                      help="shortcut: GeoSeer only — skip GeoCLIP and StreetCLIP (fast, API-based)")
+    sig.add_argument("--full-workflow", action="store_true",
+                     help="run GeoCLIP even when GeoSeer already returns a confident fix "
+                          "(disables the default short-circuit)")
 
     keys = p.add_argument_group("API keys (override environment variables)")
     keys.add_argument("--geoseer-key", metavar="KEY", help="GeoSeer API key")
@@ -242,6 +245,8 @@ def _config_from_args(args) -> AnalyzeConfig:
         cfg.use_geoclip = False
         cfg.use_streetclip = False
         cfg.use_geoseer = True
+    if args.full_workflow:
+        cfg.short_circuit_on_geoseer = False
     if args.geoseer_key:
         cfg.geoseer_key = args.geoseer_key
     if args.mapillary_token:

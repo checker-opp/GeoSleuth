@@ -41,6 +41,9 @@ from .models import (
 # or reflect where a photo was edited rather than shot — high, not certain.
 EXIF_GPS_CONFIDENCE = 0.95
 
+# A GeoSeer result at or above this confidence short-circuits the local models.
+GEOSEER_SHORT_CIRCUIT_MIN = 0.5
+
 
 # --------------------------------------------------------------------------- #
 # Stage: EXIF
@@ -213,9 +216,11 @@ def stage_landmark_model(result: GeoResult) -> None:  # Phase 2 (GeoCLIP)
     """ML coordinate estimation for images with no usable metadata.
 
     Skipped when we already have an exact GPS fix (no point running an expensive
-    model to second-guess real coordinates) or when the ML extras aren't
-    installed.
+    model to second-guess real coordinates), when GeoSeer already produced a
+    confident fix (short-circuit), or when the ML extras aren't installed.
     """
+    if result.meta.get("skip_heavy_models"):
+        return  # GeoSeer already located it confidently
     # If an exact fix already exists, ML estimation adds nothing — skip it.
     if any(s.precision == Precision.EXACT for s in result.signals):
         return
@@ -326,6 +331,14 @@ def stage_geoseer(result: GeoResult) -> None:  # AI geolocation API (3rd locator
     if res.requests_remaining is not None:
         result.note(f"GeoSeer: {res.requests_remaining} API request(s) remaining today.")
 
+    # Short-circuit: a confident GeoSeer fix makes the slow local models redundant.
+    cfg = result.meta.get("config")
+    short = getattr(cfg, "short_circuit_on_geoseer", True) if cfg else True
+    if short and api_conf >= GEOSEER_SHORT_CIRCUIT_MIN:
+        result.meta["skip_heavy_models"] = True
+        result.note("GeoSeer produced a confident fix — skipping the local "
+                    "GeoCLIP/StreetCLIP models.")
+
 
 # Opt-in: StreetCLIP is a heavy second model (~1.6 GB, slow on CPU). Off unless
 # GEOLOCATOR_STREETCLIP is set, so normal runs stay fast.
@@ -344,6 +357,8 @@ def stage_second_model(result: GeoResult) -> None:  # optional StreetCLIP cross-
     later decides how it interacts with the GeoCLIP guess (boost / re-rank /
     override / down-weight).
     """
+    if result.meta.get("skip_heavy_models"):
+        return  # GeoSeer already located it confidently
     best = max(
         (s for s in result.signals if s.locating and s.place),
         key=lambda s: (precision_rank(s.precision), s.confidence),
@@ -760,8 +775,8 @@ STAGES = [
     ("exif", stage_exif),
     ("reverse_image_search", stage_reverse_image_search),
     ("ocr", stage_ocr),
+    ("geoseer", stage_geoseer),          # runs first so it can short-circuit GeoCLIP
     ("landmark_model", stage_landmark_model),
-    ("geoseer", stage_geoseer),
     ("second_model", stage_second_model),
     ("place_lookup", stage_place_lookup),
     ("resolve_models", stage_resolve_models),
@@ -846,10 +861,10 @@ def _build_stages(config: AnalyzeConfig):
     ]
     if config.use_ocr:
         stages.append(("ocr", stage_ocr))
+    if config.use_geoseer:
+        stages.append(("geoseer", stage_geoseer))       # first: may short-circuit GeoCLIP
     if config.use_geoclip:
         stages.append(("landmark_model", stage_landmark_model))
-    if config.use_geoseer:
-        stages.append(("geoseer", stage_geoseer))
     if config.use_streetclip:
         stages.append(("second_model", stage_second_model))
     if config.use_place_lookup:
