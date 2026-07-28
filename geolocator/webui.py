@@ -291,7 +291,11 @@ def main(argv=None) -> int:
     host = os.environ.get("GEOLOCATOR_UI_HOST", "127.0.0.1")
     port = int(os.environ.get("GEOLOCATOR_UI_PORT", "5000"))
     print(f"geolocator UI -> http://{host}:{port}  (Ctrl+C to stop)")
-    app.run(host=host, port=port, debug=False)
+    # threaded=False: run analysis in the main thread. Loading a torch model in a
+    # Flask worker thread leaves its weights on the 'meta' device and inference
+    # fails ("Tensor on device cpu is not on the expected device meta"). Serial
+    # request handling is fine for a local single-user tool.
+    app.run(host=host, port=port, debug=False, threaded=False)
     return 0
 
 
