@@ -1,0 +1,11 @@
+# Phase 1 — reliable core (EXIF + geocoding + OCR)
+Pillow>=10.0.0          # image loading + EXIF fallback
+exifread>=3.0.0         # pure-python EXIF parser (primary when exiftool absent)
+requests>=2.31.0        # Nominatim reverse geocoding
+pytesseract>=0.3.10     # OCR wrapper (needs Tesseract binary installed)
+langdetect>=1.0.9       # detected text -> language -> country hint
+pysolar>=0.11           # sun position for solar-consistency corroboration
+
+# Optional external binaries (auto-detected if on PATH, not pip-installable):
+#   exiftool  -> most comprehensive EXIF extraction (RAW/HEIC/XMP)
+#   tesseract -> required for OCR to activate

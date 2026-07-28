@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geolocator-osint"
+version = "0.1.0"
+description = "Image -> location OSINT tool (EXIF + reverse geocoding + OCR, with a roadmap to ML geo-estimation)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "Pillow>=10.0.0",
+    "exifread>=3.0.0",
+    "requests>=2.31.0",
+    "pytesseract>=0.3.10",
+    "langdetect>=1.0.9",
+]
+
+[project.scripts]
+geolocate = "geolocator.cli:main"
+
+[tool.setuptools]
+packages = ["geolocator"]

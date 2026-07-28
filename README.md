@@ -1,0 +1,224 @@
+# geolocator — image → location OSINT tool
+
+Guess **where a photo was taken** from the image alone. Feed it a picture; it
+runs a layered pipeline of location signals and returns a best-guess location,
+a **confidence score**, and the **evidence trail** that produced it — never a
+bare guess.
+
+> **Scope of this release (Phase 1):** the reliable core — EXIF GPS extraction,
+> Nominatim reverse geocoding, and OCR-based language/text hinting. The heavier
+> layers (ML geo-estimation, reverse image search, street matching, shadow &
+> flora cross-referencing) are scaffolded and land in later phases — see
+> [Roadmap](#roadmap).
+
+---
+
+## What it does today
+
+| Signal | What it gives you | Reliability |
+|--------|-------------------|-------------|
+| **EXIF GPS** → Nominatim | Exact coordinates + full street address | ★★★★★ when GPS is present |
+| **EXIF metadata** | Camera, timestamp, timezone-offset longitude hint | context only |
+| **OCR** (Tesseract) | Visible text → detected language → candidate countries | ★★☆ coarse hint |
+| **ML estimate** (GeoCLIP) | Predicted coordinates from visual content alone — the no-metadata workhorse | ★★★☆ on distinctive scenes, honestly low on generic/indoor |
+| **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
+| **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
+| **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
+| **Street match** (Mapillary) | Nearby street-level imagery to visually confirm the guess | pivot / corroboration |
+| **Reverse-search pivots** | Ready-to-open Yandex/Lens/Bing/TinEye upload links | manual next step |
+
+The pipeline runs stages in priority order (cheap & deterministic first):
+
+```
+EXIF → reverse-search pivots → OCR + plates → GeoCLIP → street match → OSM cross-ref → solar/climate
+  └── P1 ──┘   └──── P4 ────┘   └─ P1+P4 ─┘   └─ P2 ─┘   └─── P4 ───┘   └────── P3 ──────┘
+```
+
+**Layering rules that keep it honest:**
+- The **most precise** signal wins the location; corroboration only nudges confidence, capped so weak hints never impersonate a GPS fix.
+- The **GeoCLIP** stage runs only when there's no exact GPS — no point second-guessing real coordinates — and its confidence comes from how tightly its top-5 guesses cluster (scattered → low-confidence, country-level at best).
+- The **solar** stage can *contradict* a guess: if the EXIF timezone offset is inconsistent with the candidate longitude, it says so.
+
+---
+
+## Install
+
+```bash
+pip install -r requirements.txt
+```
+
+Or install as a command (`geolocate`):
+
+```bash
+pip install -e .
+```
+
+### Optional external tools (strongly recommended)
+
+Two signals depend on external binaries. The tool **auto-detects** them and
+degrades gracefully if they're missing — but installing them unlocks a lot.
+
+| Tool | Enables | Windows install |
+|------|---------|-----------------|
+| **ExifTool** | Comprehensive EXIF (RAW/HEIC/XMP), the most robust GPS extraction | Download from [exiftool.org](https://exiftool.org), rename `exiftool(-k).exe` → `exiftool.exe`, put it on your `PATH` |
+| **Tesseract** | OCR (the entire text/language signal) | Install the [UB-Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki), then add its folder to `PATH` |
+
+Without ExifTool, EXIF still works via the pure-Python `exifread`/Pillow
+fallback. Without Tesseract, OCR is skipped (the tool tells you so).
+
+### ML geo-estimation (Phase 2 — optional, heavy)
+
+The GeoCLIP visual estimator is the thing that actually locates images with no
+metadata. It's a large dependency (torch), kept in a separate requirements file
+so the core stays lightweight:
+
+```bash
+pip install -r requirements.txt -r requirements-ml.txt
+```
+
+Notes:
+- **torch** is ~200 MB to download / ~2 GB installed; the pinned CPU build runs
+  anywhere. For GPU, install the CUDA torch build from pytorch.org instead.
+- **GeoCLIP** downloads its model weights (~hundreds of MB) on first run, then
+  caches them.
+- `transformers` is pinned to `<5` — GeoCLIP's encoder targets the 4.x CLIP API
+  and 5.x breaks inference.
+- With the extras absent, the ML stage is skipped gracefully (the tool says so).
+
+---
+
+## Usage
+
+```bash
+# Human-readable report
+python -m geolocator path/to/photo.jpg
+
+# Machine-readable JSON (add --verbose to include raw evidence)
+python -m geolocator path/to/photo.jpg --json
+python -m geolocator path/to/photo.jpg --json --verbose
+
+# If installed with `pip install -e .`
+geolocate path/to/photo.jpg
+```
+
+### Example (image with GPS metadata)
+
+```
+  IMAGE → LOCATION  (geolocator v0.1.0)
+  photo.jpg
+
+  BEST GUESS
+    Place       Avenue Gustave Eiffel, 7th Arrondissement, Paris, 75007, France
+    Coordinates 48.858400, 2.294500
+    Map         https://www.openstreetmap.org/?mlat=48.8584&mlon=2.2945#map=16/48.8584/2.2945
+    Precision   exact coordinates
+    Confidence  ██████████   95%
+
+  EVIDENCE
+    [exif] GPS coordinates embedded in image metadata → Avenue Gustave Eiffel …
+          confidence 0.95 · exact
+```
+
+---
+
+## How confidence works
+
+Every stage emits **signals** — a finding + how much we trust it + how precise
+it is (`exact` / `city` / `region` / `country` / `unknown`).
+
+- The **most precise** signal wins the location slot. An exact GPS fix always
+  beats a country-level language hint.
+- **Locating vs. enrichment.** Only *independent locating* signals — ones that
+  on their own say *where* the photo was taken (EXIF GPS, the ML estimate, an
+  OCR place/language, a plate country) — can raise confidence when they agree,
+  and the bonus is capped so weak hints never reach GPS-grade certainty.
+  *Enrichment* signals (nearby OSM features, "street imagery exists nearby",
+  climate zone) are shown as evidence but **never boost the number** — they'd
+  fire for any real place and would inflate even a wrong guess. So a
+  GeoCLIP-only guess reports the model's own confidence, not a padded one.
+- GPS is scored **0.95, not 1.0**: EXIF can be spoofed, stale, or reflect where
+  a photo was *edited* rather than shot.
+- The solar stage can **lower** trust: a timezone offset inconsistent with the
+  candidate longitude is flagged as a warning.
+
+This transparency is deliberate — for OSINT work, the reasoning matters as much
+as the answer.
+
+---
+
+## A note on accuracy expectations
+
+- **With GPS metadata:** 95%+ correct — this is essentially solved.
+- **Without metadata:** genuinely hard. Most social-media images have EXIF
+  stripped, so results depend on visible text, landmarks, and (in later phases)
+  ML estimation. Expect **country/region** accuracy on good photos, not
+  pinpoint coordinates on arbitrary ones. The tool always reports its
+  confidence so a weak guess is never mistaken for a strong one.
+
+---
+
+## Roadmap
+
+| Phase | Adds | Notes |
+|-------|------|-------|
+| **1 — done** | EXIF → Nominatim, OCR → language hint, confidence engine, CLI | the reliable core |
+| **2 — done** | ML geo-estimation via GeoCLIP (image → coordinates, local inference) | the real no-metadata workhorse; needs a few GB RAM, GPU ideal |
+| **3 — done** | Solar/timezone consistency (pysolar), climate-zone descriptor, OSM cross-ref (Overpass) | corroboration layer |
+| **4 — done** | Reverse-search pivots (Yandex/Lens/Bing/TinEye), street matching (Mapillary), license-plate region | best-effort; keyed APIs gated behind env vars |
+
+### What's intentionally left for later / needs your input
+
+| Item | Why it's not automatic | To enable |
+|------|------------------------|-----------|
+| **Mapillary street matching** | needs a free API token | set `MAPILLARY_TOKEN` (see [dashboard](https://www.mapillary.com/dashboard/developers)) |
+| **Automated reverse image search** | Yandex/Lens fight scraping; TinEye API is paid. We do **not** scrape or bypass CAPTCHAs | use the printed pivot links to search manually, or add a keyed TinEye/Bing client later |
+| **Flora → region from the image** | needs a plant-ID vision model | Phase 3 currently describes climate from the *candidate* coordinate instead |
+| **Shadow-angle → latitude** | needs CV shadow detection in the image | Phase 3 currently does the metadata-side solar check instead |
+| **KartaView street match** | keyless alternative to Mapillary | future add alongside `street_match.py` |
+
+The pipeline (`geolocator/pipeline.py`) defines every stage in `STAGES` — adding
+a new signal means writing one function and slotting it in.
+
+---
+
+## Configuration (environment variables)
+
+| Variable | Effect |
+|----------|--------|
+| `MAPILLARY_TOKEN` | enables the Mapillary street-matching stage |
+| `NO_COLOR` | disables ANSI colour in the terminal report |
+
+## Project layout
+
+```
+geolocator/
+  cli.py            CLI + report formatting
+  pipeline.py       stage orchestration + confidence aggregation
+  models.py         Signal / GeoResult data structures
+  # Phase 1 — reliable core
+  exif.py           EXIF extraction (exiftool → exifread → Pillow fallback)
+  geocode.py        Nominatim reverse geocoding (rate-limited, UA-compliant)
+  ocr.py            Tesseract OCR + langdetect → country hint
+  # Phase 2 — ML
+  geoestimate.py    GeoCLIP image → coordinates (lazy, optional)
+  # Phase 3 — corroboration
+  solar.py          timezone↔longitude + sun-elevation checks (pysolar)
+  climate.py        coarse latitude/climate-zone descriptor
+  osm.py            Overpass nearby-feature cross-reference
+  # Phase 4 — best-effort external
+  plates.py         license-plate format → country hint
+  reverse_search.py reverse-image-search pivot links
+  street_match.py   Mapillary street-level imagery (env token)
+tests/
+  test_pipeline.py  35 offline tests (no network / binaries needed)
+```
+
+---
+
+## Legal & ethical use
+
+This is an OSINT research tool. Geolocating images can implicate people's
+privacy and safety. Use it only on images you're authorized to analyze, in
+line with applicable law and platform terms. The reverse-image-search and
+scraping layers (Phase 4) must respect each site's terms of service and rate
+limits — the tool does **not** attempt to bypass CAPTCHAs or bot detection.

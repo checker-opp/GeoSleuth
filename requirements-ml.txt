@@ -1,0 +1,13 @@
+# Phase 2 — ML geo-estimation (optional, heavy).
+# Install ON TOP of requirements.txt to enable the GeoCLIP landmark stage:
+#     pip install -r requirements.txt -r requirements-ml.txt
+#
+# torch is large (~200 MB download, ~2 GB installed). This CPU build works
+# everywhere; for GPU, install the CUDA build of torch from pytorch.org instead.
+# GeoCLIP downloads its model weights (~hundreds of MB) on first run.
+
+torch>=2.0.0
+geoclip>=1.2.0
+# GeoCLIP's image encoder targets the transformers 4.x CLIP API; transformers
+# 5.x changed get_image_features() and breaks inference. Pin to the 4.x line.
+transformers>=4.40,<5
