@@ -8,6 +8,10 @@
 
 torch>=2.0.0
 geoclip>=1.2.0
+# The optional StreetCLIP second-model cross-check (GEOLOCATOR_STREETCLIP=1)
+# needs no extra package — it uses transformers + torch above and downloads
+# the geolocal/StreetCLIP weights (~1.6 GB) on first use. GPU strongly
+# recommended; it is impractically slow on CPU.
 # GeoCLIP's image encoder targets the transformers 4.x CLIP API; transformers
 # 5.x changed get_image_features() and breaks inference. Pin to the 4.x line.
 transformers>=4.40,<5

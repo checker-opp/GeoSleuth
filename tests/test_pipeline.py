@@ -311,6 +311,84 @@ def test_find_street_imagery_falls_back_to_kartaview(monkeypatch):
     assert res.available and res.images[0].provider == "KartaView"
 
 
+# --- OCR candidate-line extraction ----------------------------------------- #
+def test_ocr_candidate_lines_filters_noise():
+    from geolocator import ocr as ocr_mod
+    raw = "IMPERIAL WATCH CO\nbf x8\n!!\nK.B. SARKAR\ni a"
+    lines = ocr_mod._candidate_lines(raw)
+    assert any("IMPERIAL" in l for l in lines)
+    assert any("SARKAR" in l for l in lines)
+    assert "bf x8" not in lines          # no 4+ letter word
+    assert "i a" not in lines            # too short
+
+
+# --- confidence: country-overlap gate for coordinate-less hints ------------ #
+def test_country_hint_boosts_only_when_country_matches():
+    from geolocator.models import GeoResult, Signal, Coordinates, Precision
+    # ML says Pakistan; an English-language hint (candidate countries lack
+    # Pakistan) must NOT boost confidence.
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("ml", "est", 0.35, Precision.COUNTRY,
+                 coordinates=Coordinates(24.86, 67.01),
+                 place="Karachi, Pakistan", corroborating=True))
+    r.add(Signal("ocr", "english", 0.30, Precision.COUNTRY, corroborating=True,
+                 evidence={"candidate_countries": ["US", "UK", "India"]}))
+    pipeline._aggregate(r)
+    assert r.overall_confidence == 0.35   # no boost — India != Pakistan
+
+    # Now a hint whose countries include the winner's -> boosts.
+    r2 = GeoResult(image_path="x.jpg")
+    r2.add(Signal("ml", "est", 0.35, Precision.COUNTRY,
+                  coordinates=Coordinates(24.86, 67.01),
+                  place="Karachi, Pakistan", corroborating=True))
+    r2.add(Signal("ocr", "urdu", 0.30, Precision.COUNTRY, corroborating=True,
+                  evidence={"candidate_countries": ["Pakistan", "India"]}))
+    pipeline._aggregate(r2)
+    assert r2.overall_confidence > 0.35   # boosted — Pakistan matches
+
+
+def test_inconsistent_coord_corroborator_excluded():
+    from geolocator.models import GeoResult, Signal, Coordinates, Precision
+    r = GeoResult(image_path="x.jpg")
+    r.add(Signal("ml", "est", 0.35, Precision.COUNTRY,
+                 coordinates=Coordinates(24.86, 67.01), place="Karachi, Pakistan",
+                 corroborating=True))
+    # A locating signal 8000 km away must not count as agreement.
+    r.add(Signal("ocr_place", "far match", 0.55, Precision.CITY,
+                 coordinates=Coordinates(48.85, 2.35), corroborating=True))
+    # (ocr_place is CITY so it would win the slot; assert the ML stays uncorroborated
+    #  when IT is the winner is not the case here — instead check the far signal wins
+    #  but gets no bonus from the distant ML.)
+    pipeline._aggregate(r)
+    # ocr_place (CITY) wins; ML is >200km away so provides no bonus.
+    assert r.best_precision == Precision.CITY
+    assert r.overall_confidence == 0.55
+
+
+# --- StreetCLIP helpers ---------------------------------------------------- #
+def test_country_of_parses_display_name():
+    assert pipeline._country_of("Princess St, Lyari, Karachi, Sindh, Pakistan") == "Pakistan"
+    assert pipeline._country_of("") is None
+
+
+def test_streetclip_off_by_default(monkeypatch):
+    monkeypatch.delenv("GEOLOCATOR_STREETCLIP", raising=False)
+    assert pipeline.streetclip_enabled() is False
+    monkeypatch.setenv("GEOLOCATOR_STREETCLIP", "1")
+    assert pipeline.streetclip_enabled() is True
+
+
+# --- batch input expansion ------------------------------------------------- #
+def test_expand_inputs_dir_and_missing(tmp_path):
+    from geolocator import cli
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    (tmp_path / "b.png").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"x")
+    images, errors = cli._expand_inputs([str(tmp_path), "does_not_exist.jpg"])
+    assert len(images) == 2                      # jpg + png, not txt
+    assert any("not found" in e for e in errors)
+
+
 # --- extractor safety ------------------------------------------------------ #
 def test_extract_missing_file_returns_empty_shell():
     data = exif_mod.extract("does_not_exist_12345.jpg")

@@ -148,12 +148,52 @@ def _print_human(result: GeoResult) -> None:
         print()
 
 
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".heic", ".heif"}
+
+
+def _expand_inputs(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Expand paths (files and/or directories) into a de-duplicated image list.
+
+    Returns (image_paths, errors). Directories are scanned (non-recursively) for
+    known image extensions, sorted for stable output."""
+    images: list[str] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+
+    def add(p: str) -> None:
+        key = os.path.normcase(os.path.abspath(p))
+        if key not in seen:
+            seen.add(key)
+            images.append(p)
+
+    for path in paths:
+        if os.path.isdir(path):
+            found = sorted(
+                os.path.join(path, f)
+                for f in os.listdir(path)
+                if os.path.splitext(f)[1].lower() in _IMAGE_EXTS
+            )
+            if not found:
+                errors.append(f"no images found in directory: {path}")
+            for f in found:
+                add(f)
+        elif os.path.isfile(path):
+            add(path)
+        else:
+            errors.append(f"file not found: {path}")
+    return images, errors
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="geolocate",
-        description="Guess where a photo was taken (EXIF + OCR + reverse geocoding).",
+        description="Guess where a photo was taken (EXIF + OCR + ML + reverse geocoding).",
     )
-    p.add_argument("image", help="path to the image file")
+    p.add_argument(
+        "images",
+        nargs="+",
+        help="one or more image files, and/or a directory of images (batch)",
+    )
     p.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p.add_argument(
         "--verbose", action="store_true", help="include raw signal evidence in JSON"
@@ -162,24 +202,42 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _result_json(result: GeoResult, verbose: bool) -> dict:
+    payload = result.to_dict()
+    if not verbose:
+        for sig in payload["signals"]:
+            sig.pop("evidence", None)
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    if not os.path.isfile(args.image):
-        print(f"error: file not found: {args.image}", file=sys.stderr)
+    images, errors = _expand_inputs(args.images)
+    for err in errors:
+        print(f"error: {err}", file=sys.stderr)
+    if not images:
         return 2
 
-    result = analyze(args.image)
+    # Analyze each image. The GeoCLIP model is cached after the first load, so a
+    # batch reuses it rather than reloading per image.
+    results = [analyze(img) for img in images]
 
     if args.json:
-        payload = result.to_dict()
-        if not args.verbose:
-            for sig in payload["signals"]:
-                sig.pop("evidence", None)
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        if len(results) == 1:
+            print(json.dumps(_result_json(results[0], args.verbose), indent=2, ensure_ascii=False))
+        else:
+            payload = [_result_json(r, args.verbose) for r in results]
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
-        _print_human(result)
-    return 0
+        for i, result in enumerate(results):
+            if len(results) > 1:
+                print(_dim(f"\n{'═' * 60}") if _UNICODE_OK else _dim("\n" + "=" * 60))
+                print(_dim(f"  [{i + 1}/{len(results)}]"))
+            _print_human(result)
+
+    # Exit non-zero only if nothing produced a location at all.
+    return 0 if any(r.best_coordinates or r.best_place for r in results) else 1
 
 
 if __name__ == "__main__":

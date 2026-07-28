@@ -21,6 +21,7 @@ from . import __version__
 from .models import Coordinates
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = f"geolocator-osint/{__version__} (image geolocation research tool)"
 _MIN_INTERVAL = 1.05  # seconds between requests — a little over the 1/sec limit
 
@@ -35,6 +36,15 @@ class Place:
     country_code: Optional[str] = None
     state: Optional[str] = None
     city: Optional[str] = None
+
+
+@dataclass
+class SearchHit:
+    display_name: str
+    lat: float
+    lon: float
+    category: Optional[str] = None   # OSM class, e.g. "shop", "amenity"
+    importance: float = 0.0          # Nominatim's relevance score (0–1)
 
 
 def _throttle() -> None:
@@ -88,3 +98,56 @@ def reverse(coords: Coordinates, timeout: float = 15.0) -> Optional[Place]:
         state=addr.get("state") or addr.get("region"),
         city=city,
     )
+
+
+def search(
+    query: str,
+    limit: int = 5,
+    country_codes: Optional[list[str]] = None,
+    timeout: float = 15.0,
+) -> list[SearchHit]:
+    """Forward-geocode a free-text query (e.g. a business name) to candidate
+    places. Optionally restrict to country codes to disambiguate. Rate-limited
+    and UA-compliant like reverse(); returns [] on any failure."""
+    if not query or not query.strip():
+        return []
+    _throttle()
+    params = {
+        "q": query,
+        "format": "json",
+        "addressdetails": 0,
+        "limit": limit,
+    }
+    if country_codes:
+        params["countrycodes"] = ",".join(c.lower() for c in country_codes)
+    try:
+        resp = requests.get(
+            NOMINATIM_SEARCH_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
+            timeout=timeout,
+        )
+    except requests.RequestException:
+        return []
+    if resp.status_code != 200:
+        return []
+    try:
+        rows = resp.json()
+    except ValueError:
+        return []
+
+    hits: list[SearchHit] = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            hits.append(
+                SearchHit(
+                    display_name=row.get("display_name", query),
+                    lat=float(row["lat"]),
+                    lon=float(row["lon"]),
+                    category=row.get("class"),
+                    importance=float(row.get("importance", 0.0) or 0.0),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return hits

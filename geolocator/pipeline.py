@@ -13,6 +13,8 @@ adding a stage means writing one function and slotting it into ``STAGES``.
 
 from __future__ import annotations
 
+import os
+
 from . import climate as climate_mod
 from . import exif as exif_mod
 from . import geocode as geocode_mod
@@ -21,6 +23,7 @@ from . import ocr as ocr_mod
 from . import osm as osm_mod
 from . import plates as plates_mod
 from . import reverse_search as reverse_search_mod
+from . import secondmodel as secondmodel_mod
 from . import solar as solar_mod
 from . import street_match as street_match_mod
 from .models import (
@@ -124,6 +127,10 @@ def stage_ocr(result: GeoResult) -> None:
         result.note("OCR ran but found no readable text in the image.")
         return
 
+    # Stash candidate name lines for the later place-name lookup stage.
+    if ocr.lines:
+        result.meta["ocr_lines"] = ocr.lines
+
     snippet = _snippet(ocr.text)
 
     if ocr.language and ocr.language_countries:
@@ -168,7 +175,8 @@ def stage_ocr(result: GeoResult) -> None:
                 confidence=0.25,
                 precision=Precision.COUNTRY,
                 corroborating=True,  # independent locating hint
-                evidence={"token": hint.token, "note": hint.note},
+                evidence={"token": hint.token, "note": hint.note,
+                          "candidate_countries": [hint.country]},
             )
         )
     elif hint.matched:
@@ -241,6 +249,7 @@ def stage_landmark_model(result: GeoResult) -> None:  # Phase 2 (GeoCLIP)
             precision=precision,
             coordinates=coords,
             place=place_name,
+            corroborating=True,  # independent locator; boosts an agreeing winner
             evidence={
                 "model": "GeoCLIP",
                 "top_probability": round(est.top.probability, 4),
@@ -250,6 +259,159 @@ def stage_landmark_model(result: GeoResult) -> None:  # Phase 2 (GeoCLIP)
                      "prob": round(p.probability, 4)}
                     for p in est.predictions
                 ],
+            },
+        )
+    )
+
+
+# Opt-in: StreetCLIP is a heavy second model (~1.6 GB, slow on CPU). Off unless
+# GEOLOCATOR_STREETCLIP is set, so normal runs stay fast.
+STREETCLIP_ENV = "GEOLOCATOR_STREETCLIP"
+
+
+def streetclip_enabled() -> bool:
+    return bool(os.environ.get(STREETCLIP_ENV))
+
+
+def stage_second_model(result: GeoResult) -> None:  # optional StreetCLIP cross-check
+    """Independent second opinion on the country via StreetCLIP.
+
+    Opt-in (GEOLOCATOR_STREETCLIP=1) because the model is large and slow on CPU.
+    When it AGREES with the visual (GeoCLIP) country, that's genuine
+    cross-model corroboration and boosts confidence; a disagreement is surfaced
+    as a caution rather than silently ignored.
+    """
+    if not streetclip_enabled():
+        return
+
+    # Compare against the current best locating guess's country, if we have one.
+    best = max(
+        (s for s in result.signals if s.locating and s.place),
+        key=lambda s: (precision_rank(s.precision), s.confidence),
+        default=None,
+    )
+    geoclip_country = _country_of(best.place) if best and best.place else None
+
+    pred = secondmodel_mod.predict_country(
+        result.image_path,
+        extra_countries=[geoclip_country] if geoclip_country else None,
+    )
+    if pred is None:
+        result.note("StreetCLIP second opinion unavailable (ML extras/weights).")
+        return
+
+    agrees = (
+        geoclip_country is not None
+        and pred.country.lower() in geoclip_country.lower()
+    )
+    if agrees:
+        result.add(
+            Signal(
+                source="streetclip",
+                description=f"StreetCLIP independently agrees on {pred.country} "
+                f"(p={pred.score:.2f}) — cross-model corroboration",
+                confidence=0.40,
+                precision=Precision.COUNTRY,
+                corroborating=True,
+                evidence={"country": pred.country, "score": round(pred.score, 3),
+                          "candidate_countries": [pred.country]},
+            )
+        )
+    else:
+        result.add(
+            Signal(
+                source="streetclip",
+                description=f"StreetCLIP's top country is {pred.country} "
+                f"(p={pred.score:.2f})"
+                + (f", differing from the visual estimate ({geoclip_country})"
+                   if geoclip_country else ""),
+                confidence=0.30,
+                precision=Precision.COUNTRY,
+                # An independent locator: if there's no GeoCLIP guess it can even
+                # stand in; if it disagrees it's shown but not treated as agreement.
+                corroborating=False,
+                evidence={"country": pred.country, "score": round(pred.score, 3)},
+            )
+        )
+        if geoclip_country:
+            result.note(
+                f"Model disagreement: GeoCLIP→{geoclip_country}, "
+                f"StreetCLIP→{pred.country}. Treat the country as uncertain."
+            )
+
+
+def _country_of(place: str) -> Optional[str]:
+    """Last comma-separated component of a Nominatim display name is the country."""
+    if not place:
+        return None
+    parts = [p.strip() for p in place.split(",") if p.strip()]
+    return parts[-1] if parts else None
+
+
+def stage_place_lookup(result: GeoResult) -> None:  # OCR text -> Nominatim search
+    """Turn OCR'd business / place names into a location.
+
+    Searches Nominatim for each candidate name and, when a hit lands near the
+    visual (GeoCLIP) candidate, emits a strong *locating* signal — a named
+    business that both OCR reads and the model points at is powerful evidence.
+    Requiring geographic agreement with the ML candidate is what keeps noisy
+    OCR tokens from producing false matches.
+    """
+    names = result.meta.get("ocr_lines") or []
+    if not names:
+        return
+    anchor = _current_best_coord(result)  # GeoCLIP/EXIF candidate, if any
+    if anchor is None:
+        # Without a visual anchor an OCR name is geographically ambiguous
+        # (a shop name exists in many cities) — skip rather than guess wrong.
+        result.note(
+            f"OCR found {len(names)} candidate name(s) but no visual anchor to "
+            f"disambiguate them; use the reverse-image-search pivots."
+        )
+        return
+
+    # Query the most distinctive candidates (longest = most specific), capped to
+    # respect Nominatim's rate limit.
+    ranked = sorted(names, key=len, reverse=True)[:4]
+    best_hit = None
+    best_dist = float("inf")
+    best_name = None
+    for name in ranked:
+        for hit in geocode_mod.search(name, limit=5):
+            dist = geoestimate_mod._haversine_km(
+                anchor, Coordinates(hit.lat, hit.lon)
+            )
+            if dist < best_dist:
+                best_dist, best_hit, best_name = dist, hit, name
+
+    # Accept only if a hit is in the same metro area as the visual estimate.
+    CONSISTENT_KM = 30.0
+    if best_hit is None or best_dist > CONSISTENT_KM:
+        if best_hit is not None:
+            result.note(
+                f"OCR name search found candidates but none near the visual "
+                f"estimate (closest ~{best_dist:.0f} km) — not used."
+            )
+        return
+
+    coords = Coordinates(best_hit.lat, best_hit.lon)
+    result.add(
+        Signal(
+            source="ocr_place",
+            description=(
+                f"OCR read '{best_name}' → matches '{best_hit.display_name}' "
+                f"~{best_dist:.0f} km from the visual estimate"
+            ),
+            confidence=0.55,
+            precision=Precision.CITY,
+            coordinates=coords,
+            place=best_hit.display_name,
+            corroborating=True,  # independent locator that agrees with the model
+            evidence={
+                "ocr_name": best_name,
+                "matched": best_hit.display_name,
+                "distance_km_from_visual": round(best_dist, 1),
+                "category": best_hit.category,
             },
         )
     )
@@ -407,6 +569,8 @@ STAGES = [
     ("reverse_image_search", stage_reverse_image_search),
     ("ocr", stage_ocr),
     ("landmark_model", stage_landmark_model),
+    ("second_model", stage_second_model),
+    ("place_lookup", stage_place_lookup),
     ("street_match", stage_street_match),
     ("osm_crossref", stage_osm_crossref),
     ("shadow_flora", stage_shadow_flora),
@@ -445,13 +609,25 @@ def _aggregate(result: GeoResult) -> None:
     # Corroboration bonus: only *independent locating* signals (corroborating=
     # True) count. Enrichment signals — nearby OSM features, "street imagery
     # exists", climate zone — are excluded on purpose: they'd fire for any real
-    # place and would inflate even a wrong guess. Diminishing returns, capped so
-    # a pile of weak hints never impersonates a GPS-grade certainty.
-    others = [
-        s
-        for s in result.signals
-        if s is not best and s.corroborating and s.precision != Precision.UNKNOWN
-    ]
+    # place and would inflate even a wrong guess. A coordinate-bearing
+    # corroborator must also be geographically consistent with the winner (else
+    # it's evidence *against*, not for). Diminishing returns, capped so a pile
+    # of weak hints never impersonates a GPS-grade certainty.
+    others = []
+    for s in result.signals:
+        if s is best or not s.corroborating or s.precision == Precision.UNKNOWN:
+            continue
+        if s.coordinates and best.coordinates:
+            if geoestimate_mod._haversine_km(s.coordinates, best.coordinates) > 200:
+                continue  # points somewhere else — don't count as agreement
+        elif not s.coordinates:
+            # A country-level hint with no coordinates (OCR language, plate) only
+            # corroborates if its candidate countries include the winner's.
+            cands = s.evidence.get("candidate_countries")
+            if cands and best.place:
+                if not any(c.lower() in best.place.lower() for c in cands):
+                    continue  # hint points at other countries — not agreement
+        others.append(s)
     if others and best.precision != Precision.EXACT:
         bonus = min(0.15, 0.05 * len(others))
         confidence = min(0.85, confidence + bonus)

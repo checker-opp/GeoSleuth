@@ -21,6 +21,8 @@ bare guess.
 | **EXIF metadata** | Camera, timestamp, timezone-offset longitude hint | context only |
 | **OCR** (Tesseract) | Visible text → detected language → candidate countries | ★★☆ coarse hint |
 | **ML estimate** (GeoCLIP) | Predicted coordinates from visual content alone — the no-metadata workhorse | ★★★☆ on distinctive scenes, honestly low on generic/indoor |
+| **OCR place lookup** | A business/place name OCR reads, geocoded and cross-checked against the visual estimate | ★★★★ when it matches — turns a sign into coordinates |
+| **StreetCLIP** (opt-in) | Independent 2nd model's country vote; boosts confidence when it agrees with GeoCLIP | cross-model corroboration (GPU recommended) |
 | **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
 | **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
 | **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
@@ -30,8 +32,8 @@ bare guess.
 The pipeline runs stages in priority order (cheap & deterministic first):
 
 ```
-EXIF → reverse-search pivots → OCR + plates → GeoCLIP → street match → OSM cross-ref → solar/climate
-  └── P1 ──┘   └──── P4 ────┘   └─ P1+P4 ─┘   └─ P2 ─┘   └─── P4 ───┘   └────── P3 ──────┘
+EXIF → reverse-search pivots → OCR+plates → GeoCLIP → [StreetCLIP] → OCR place lookup
+     → street match → OSM cross-ref → solar/climate
 ```
 
 **Layering rules that keep it honest:**
@@ -97,6 +99,11 @@ python -m geolocator path/to/photo.jpg
 python -m geolocator path/to/photo.jpg --json
 python -m geolocator path/to/photo.jpg --json --verbose
 
+# Batch: several files, or a whole directory (JSON becomes an array).
+# The GeoCLIP model loads once and is reused across the batch.
+python -m geolocator a.jpg b.jpg c.jpg
+python -m geolocator ./my_photos/ --json
+
 # If installed with `pip install -e .`
 geolocate path/to/photo.jpg
 ```
@@ -130,12 +137,21 @@ it is (`exact` / `city` / `region` / `country` / `unknown`).
   beats a country-level language hint.
 - **Locating vs. enrichment.** Only *independent locating* signals — ones that
   on their own say *where* the photo was taken (EXIF GPS, the ML estimate, an
-  OCR place/language, a plate country) — can raise confidence when they agree,
-  and the bonus is capped so weak hints never reach GPS-grade certainty.
-  *Enrichment* signals (nearby OSM features, "street imagery exists nearby",
-  climate zone) are shown as evidence but **never boost the number** — they'd
-  fire for any real place and would inflate even a wrong guess. So a
-  GeoCLIP-only guess reports the model's own confidence, not a padded one.
+  OCR place-name match, a StreetCLIP country vote, a plate country) — can raise
+  confidence when they agree, and the bonus is capped so weak hints never reach
+  GPS-grade certainty. *Enrichment* signals (nearby OSM features, "street
+  imagery exists nearby", climate zone) are shown as evidence but **never boost
+  the number** — they'd fire for any real place and would inflate even a wrong
+  guess. So a GeoCLIP-only guess reports the model's own confidence, not a
+  padded one.
+- **Agreement must be real.** A corroborating signal only counts if it actually
+  agrees with the winner: a coordinate-bearing hint must be within ~200 km, and
+  a country-level hint's candidate countries must include the winner's country.
+  A hint pointing elsewhere is excluded (and, for the second model, surfaced as
+  a disagreement caution).
+- **Enrichment never wins the location slot.** Only locating signals can become
+  the reported location — an OSM/street-match signal describes a candidate but
+  can't hijack the answer with a placeless coordinate.
 - GPS is scored **0.95, not 1.0**: EXIF can be spoofed, stale, or reflect where
   a photo was *edited* rather than shot.
 - The solar stage can **lower** trust: a timezone offset inconsistent with the
@@ -185,7 +201,14 @@ a new signal means writing one function and slotting it in.
 | Variable | Effect |
 |----------|--------|
 | `MAPILLARY_TOKEN` | prefers Mapillary for street matching (better coverage); without it, keyless KartaView is used |
+| `GEOLOCATOR_STREETCLIP` | set to `1` to enable the StreetCLIP second-model cross-check (heavy; GPU recommended — see note below) |
 | `NO_COLOR` | disables ANSI colour in the terminal report |
+
+> **StreetCLIP note:** the cross-check loads `geolocal/StreetCLIP` (~1.6 GB,
+> CLIP-ViT-L/14). On a GPU it's quick; on CPU it's impractically slow (model
+> load alone can exceed 10 minutes), which is why it's **off by default**. The
+> integration is wired and unit-tested, but its inference was **not validated on
+> CPU-only hardware** in development — enable it only with a GPU.
 
 ## Project layout
 
@@ -196,10 +219,11 @@ geolocator/
   models.py         Signal / GeoResult data structures
   # Phase 1 — reliable core
   exif.py           EXIF extraction (exiftool → exifread → Pillow fallback)
-  geocode.py        Nominatim reverse geocoding (rate-limited, UA-compliant)
-  ocr.py            Tesseract OCR + langdetect → country hint
+  geocode.py        Nominatim reverse + forward (place-name) geocoding
+  ocr.py            Tesseract OCR (upscale/contrast/multi-PSM) + langdetect
   # Phase 2 — ML
   geoestimate.py    GeoCLIP image → coordinates (lazy, optional)
+  secondmodel.py    StreetCLIP zero-shot country cross-check (opt-in, GPU)
   # Phase 3 — corroboration
   solar.py          timezone↔longitude + sun-elevation checks (pysolar)
   climate.py        coarse latitude/climate-zone descriptor
@@ -209,7 +233,7 @@ geolocator/
   reverse_search.py reverse-image-search pivot links
   street_match.py   Mapillary (token) + KartaView (keyless) street imagery
 tests/
-  test_pipeline.py  37 offline tests (no network / binaries needed)
+  test_pipeline.py  44 offline tests (no network / binaries needed)
 ```
 
 ---

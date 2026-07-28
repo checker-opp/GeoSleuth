@@ -61,6 +61,7 @@ class OcrResult:
     text: str = ""
     language: Optional[str] = None        # langdetect code, e.g. "fr"
     language_countries: list[str] = field(default_factory=list)
+    lines: list[str] = field(default_factory=list)  # candidate name lines
     reason: Optional[str] = None          # why unavailable, if applicable
 
     @property
@@ -112,11 +113,72 @@ def tesseract_available() -> bool:
     return _resolve_tesseract() is not None
 
 
+# Upscale target for OCR — signage is often small in a wide street photo, and
+# Tesseract does markedly better when the text is large enough.
+_OCR_TARGET_LONG_EDGE = 1800
+
+
+def _preprocess(image):
+    """Grayscale, upscale-if-small, and autocontrast to boost OCR recall."""
+    from PIL import Image, ImageOps
+
+    g = ImageOps.grayscale(image)
+    w, h = g.size
+    longest = max(w, h)
+    if longest < _OCR_TARGET_LONG_EDGE:
+        scale = _OCR_TARGET_LONG_EDGE / float(longest)
+        g = g.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+    return ImageOps.autocontrast(g)
+
+
+def _ocr_text(image, config: str) -> str:
+    import pytesseract
+
+    try:
+        return pytesseract.image_to_string(image, config=config).strip()
+    except Exception:
+        return ""
+
+
+def _candidate_lines(text: str) -> list[str]:
+    """Pull out plausible business / place-name lines from raw OCR output.
+
+    Keeps lines with real letters and at least a few characters, drops obvious
+    noise. These feed the Nominatim place-name lookup stage."""
+    import re
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = " ".join(raw.split())
+        if len(line) < 4:
+            continue
+        letters = sum(c.isalpha() for c in line)
+        if letters < 3 or letters < len(line) * 0.4:  # mostly symbols/digits
+            continue
+        # collapse repeated punctuation, strip leading/trailing junk
+        line = re.sub(r"[^\w&.,'\- ]+", " ", line).strip()
+        line = " ".join(line.split())
+        # require at least one "real word" token to cut OCR gibberish like "bf x8"
+        if not any(len(tok) >= 4 and tok.isalpha() for tok in line.split()):
+            continue
+        key = line.lower()
+        if len(line) >= 4 and key not in seen:
+            seen.add(key)
+            out.append(line)
+    return out
+
+
 def run(path: str) -> OcrResult:
     """Extract visible text and infer its language. Never raises on the normal
-    'tools not installed' path."""
+    'tools not installed' path.
+
+    Runs OCR on a preprocessed (grayscale, upscaled, contrast-boosted) image
+    using two page-segmentation modes — the default block mode and sparse-text
+    mode (good for scattered signage) — and merges the results.
+    """
     try:
-        import pytesseract
+        import pytesseract  # noqa: F401
         from PIL import Image
     except ImportError as exc:
         return OcrResult(available=False, reason=f"missing python dependency: {exc.name}")
@@ -128,13 +190,31 @@ def run(path: str) -> OcrResult:
         )
 
     try:
-        text = pytesseract.image_to_string(Image.open(path))
-    except Exception as exc:  # pytesseract wraps subprocess/PIL errors broadly
-        return OcrResult(available=False, reason=f"OCR failed: {exc}")
+        image = Image.open(path)
+        prepped = _preprocess(image)
+    except Exception as exc:
+        return OcrResult(available=False, reason=f"OCR failed to open/preprocess: {exc}")
 
-    result = OcrResult(available=True, text=text.strip())
+    # Two passes: default block segmentation + sparse-text (psm 11) for signage.
+    block = _ocr_text(prepped, "--psm 3")
+    sparse = _ocr_text(prepped, "--psm 11")
+
+    # Merge unique lines across both passes, preserving order.
+    merged_lines: list[str] = []
+    seen: set[str] = set()
+    for chunk in (block, sparse):
+        for ln in chunk.splitlines():
+            k = " ".join(ln.split()).lower()
+            if k and k not in seen:
+                seen.add(k)
+                merged_lines.append(ln)
+    text = "\n".join(merged_lines).strip()
+
+    result = OcrResult(available=True, text=text)
     if not result.has_text:
         return result
+
+    result.lines = _candidate_lines(text)
 
     # Language detection needs a bit of signal; skip on tiny/garbage output.
     cleaned = " ".join(result.text.split())
