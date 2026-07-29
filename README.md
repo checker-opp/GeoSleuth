@@ -277,7 +277,7 @@ python -m geolocator.webui   # → http://127.0.0.1:5000
 > (`torch`/`geoclip`/`transformers`) come with the standard `pip install`, so the
 > Download button just fetches the large weight files with a progress bar.
 > **GeoCLIP and StreetCLIP are two separate downloads** — GeoCLIP ~1.7 GB (used by
-> default), StreetCLIP ~1.6 GB (opt-in). Each has its own button; they're never
+> default), StreetCLIP ~1.6 GB (also required). Each has its own button; they're never
 > fetched together.
 
 ---
@@ -323,13 +323,21 @@ as the answer.
 
 ## A note on accuracy expectations
 
-- **With GPS metadata:** 95%+ correct — this is essentially solved.
-- **Without metadata:** genuinely hard. Most social-media images have EXIF
-  stripped, so results depend on the ML/AI locators (GeoCLIP, GeoSeer), visible
-  text, and landmarks. Expect **country/region** accuracy on generic photos and
-  **city-level** on distinctive ones — not pinpoint coordinates on arbitrary
-  images. The tool always reports its confidence so a weak guess is never
-  mistaken for a strong one.
+Run the tool **properly first** — it requires GeoCLIP + StreetCLIP downloaded
+(`--download-models`) and refuses to run otherwise, precisely so accuracy isn't
+judged on a half-configured setup.
+
+- **With GPS metadata:** 95%+ correct — essentially solved.
+- **Distinctive scenes** (landmarks, recognisable skylines): the local models do
+  well, often **city-level** — in testing, 11/12 world landmarks were correct.
+- **Generic street/indoor photos** (e.g. random reddit/Pinterest city pics): this
+  is the genuinely hard case. The local models reliably get the **country** but
+  the **exact city/coordinates are often wrong or low-confidence** — and the tool
+  says so via its confidence score rather than faking a pinpoint.
+- **For exact locations on hard photos, add a GeoSeer key** (`GEOSEER_API_KEY`).
+  It's a dedicated geolocation AI and is the realistic path to building/street-
+  level accuracy on generic images — with the local models alone, treat a
+  low-confidence pin as "right country, best guess," not a verified location.
 
 ---
 
