@@ -133,9 +133,9 @@ class AnalyzeConfig:
     """
 
     use_ocr: bool = True
-    use_geoclip: bool = True          # local CLIP model (weights download on first use)
+    use_geoclip: bool = True          # local CLIP model (required)
     use_geoseer: bool = True          # AI API; self-skips if no key is available
-    use_streetclip: bool = False      # 2nd model; opt-in weights download
+    use_streetclip: bool = True       # 2nd model — ON by default (required setup)
     use_place_lookup: bool = True
     use_street_match: bool = True
     use_osm: bool = True
@@ -151,7 +151,12 @@ class AnalyzeConfig:
 
     @classmethod
     def from_env(cls) -> "AnalyzeConfig":
-        """Backward-compatible default: StreetCLIP follows its env flag."""
+        """Default config. GeoCLIP + StreetCLIP are both on by default (the
+        required local setup). GEOLOCATOR_STREETCLIP=0 can still disable it."""
         import os
 
-        return cls(use_streetclip=bool(os.environ.get("GEOLOCATOR_STREETCLIP")))
+        env = os.environ.get("GEOLOCATOR_STREETCLIP")
+        cfg = cls()
+        if env is not None and env in ("0", "false", "False", ""):
+            cfg.use_streetclip = False
+        return cfg

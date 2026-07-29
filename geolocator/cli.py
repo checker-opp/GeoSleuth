@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "images",
-        nargs="+",
+        nargs="*",
         help="one or more image files, and/or a directory of images (batch)",
     )
     p.add_argument("--json", action="store_true", help="output machine-readable JSON")
@@ -228,8 +228,51 @@ def build_parser() -> argparse.ArgumentParser:
     keys.add_argument("--geoseer-key", metavar="KEY", help="GeoSeer API key")
     keys.add_argument("--mapillary-token", metavar="TOKEN", help="Mapillary access token")
 
+    setup = p.add_argument_group("setup")
+    setup.add_argument("--download-models", action="store_true",
+                       help="download the required local models (GeoCLIP + StreetCLIP) and exit")
+    setup.add_argument("--skip-model-check", action="store_true",
+                       help="bypass the required-models check (advanced; not for reviewing accuracy)")
+
     p.add_argument("--version", action="version", version=f"geolocator {__version__}")
     return p
+
+
+def _download_all_models() -> int:
+    """Load (downloading if needed) both required local models, showing progress."""
+    from . import modelmgr
+    print("Setting up required local models - this downloads ~3.3 GB on first run.\n")
+    try:
+        from . import geoestimate, secondmodel
+    except Exception as exc:
+        print(f"error: ML packages not installed ({exc}). Run:  pip install .", file=sys.stderr)
+        return 1
+    print("[1/2] GeoCLIP (image -> coordinates)...", flush=True)
+    if geoestimate._load_model() is None:
+        print("  [x] GeoCLIP failed to load", file=sys.stderr); return 1
+    print("  [ok] GeoCLIP ready")
+    print("[2/2] StreetCLIP (country cross-check)...", flush=True)
+    m, _ = secondmodel._load()
+    if m is None:
+        print("  [x] StreetCLIP failed to load", file=sys.stderr); return 1
+    print("  [ok] StreetCLIP ready\n\nAll set - the tool is ready to use.")
+    return 0
+
+
+def _enforce_models() -> int | None:
+    """Return an exit code if required models are missing, else None."""
+    from . import modelmgr
+    ok, problems = modelmgr.preflight()
+    if ok:
+        return None
+    print("The required local models are not set up:\n", file=sys.stderr)
+    for p in problems:
+        print(f"  - {p}", file=sys.stderr)
+    print("\nDownload them once with:\n    python -m geolocator --download-models"
+          "\n(or use the Download buttons in the web UI).\n"
+          "This tool needs GeoCLIP + StreetCLIP to produce accurate results; "
+          "running without them is not a valid test.", file=sys.stderr)
+    return 3
 
 
 def _config_from_args(args) -> AnalyzeConfig:
@@ -264,6 +307,22 @@ def _result_json(result: GeoResult, verbose: bool) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.download_models:
+        return _download_all_models()
+
+    # Refuse to run until the required local models are downloaded & installed —
+    # so accuracy can't be judged on a crippled setup. Bypass only if explicitly
+    # asked (advanced use).
+    if not args.skip_model_check:
+        code = _enforce_models()
+        if code is not None:
+            return code
+
+    if not args.images:
+        print("error: no image provided. Usage: geolocate IMAGE [IMAGE ...]",
+              file=sys.stderr)
+        return 2
 
     images, errors = _expand_inputs(args.images)
     for err in errors:

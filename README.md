@@ -23,27 +23,31 @@ cd geosleuth
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-# 3. Install everything (CLI, Web UI, local GeoCLIP, API locators)
+# 3. Install everything (CLI, Web UI, local GeoCLIP + StreetCLIP, API locators)
 pip install -e .            # or: pip install -r requirements.txt
 
-# 4. (recommended) install the OCR engine
+# 4. REQUIRED: download the local models (GeoCLIP + StreetCLIP, ~3.3 GB, one-time)
+python -m geolocator --download-models
+
+# 5. (recommended) install the OCR engine
 winget install UB-Mannheim.TesseractOCR                 # Windows
 #    macOS:  brew install tesseract      Debian/Ubuntu:  sudo apt install tesseract-ocr
 
-# 5. Run it — one image, a whole folder (batch), or the browser UI
+# 6. Run it — one image, a whole folder (batch), or the browser UI
 python -m geolocator path/to/photo.jpg      # single image (or:  geolocate photo.jpg)
 python -m geolocator path/to/folder/ --json # batch: every image in a folder → JSON
 geolocate-ui                                # Web UI → http://127.0.0.1:5000
 ```
 
-> **One install, everything included.** `torch` + the local **GeoCLIP** model come
-> with it, so no-metadata photos work out of the box. Model *weights* download on
-> first use (GeoCLIP ~1.7 GB); **StreetCLIP** is the only opt-in extra (its ~1.6 GB
-> weights download only if you enable it with `--streetclip`).
+> **Both local models are required.** The tool **refuses to run until GeoCLIP and
+> StreetCLIP are downloaded** (`python -m geolocator --download-models`, ~3.3 GB
+> one-time) — so results are never judged on a crippled setup. StreetCLIP runs
+> **by default** as a cross-check on every image. (The web UI's *Local models*
+> panel downloads them with a progress bar instead.)
 >
-> Add a free **GeoSeer** API key and it becomes the primary locator — and when it
-> returns a confident fix, the slow local GeoCLIP is **skipped automatically**
-> (pass `--full-workflow` to run both). Full timings in
+> A free **GeoSeer** API key is optional but recommended — when set, it becomes
+> the strongest locator and a confident GeoSeer fix **short-circuits** the local
+> models (`--full-workflow` runs everything). Full timings in
 > [Requirements & setup time](#requirements--expected-setup-time).
 
 ---
@@ -111,7 +115,7 @@ Every result ships with its **confidence** and **evidence trail** — never a ba
 | **ML estimate** (GeoCLIP) | Predicted coordinates from visual content alone — the no-metadata workhorse | ★★★☆ on distinctive scenes, honestly low on generic/indoor |
 | **GeoSeer AI** (opt-in key) | Dedicated geolocation API (GeoSpy-style) → coordinates + address + confidence; strongest single locator | ★★★★ (free tier ~10/day) |
 | **OCR place lookup** | A business/place name OCR reads, geocoded and cross-checked against the visual estimate | ★★★★ when it matches — turns a sign into coordinates |
-| **StreetCLIP** (opt-in) | Independent 2nd model's country vote; agrees→boost, disagrees→re-rank/override GeoCLIP | cross-model corroboration + **error correction** |
+| **StreetCLIP** (on by default) | Independent 2nd model's country vote; agrees→boost, disagrees→re-rank/override GeoCLIP | cross-model corroboration + **error correction** |
 | **License plate** | Distinctive plate format in OCR text → country | ★★☆ conservative |
 | **OSM cross-ref** (Overpass) | Named features near the candidate — corroborates a real place | corroboration |
 | **iNaturalist** | Species actually observed near the candidate — corroborates the biome | corroboration (keyless) |
@@ -152,8 +156,10 @@ That's the whole thing — CLI, web UI, API locators (GeoSeer), and the local
 - **GeoCLIP** downloads its weights (**~1.7 GB**, CLIP-ViT-L/14) on the **first
   run**, then caches them under `~/.cache/huggingface` (or fetch them ahead of
   time from the [Web UI](#web-ui) with a progress bar).
-- **StreetCLIP** is the only opt-in piece: the packages are already installed,
-  but its ~1.6 GB weights download only when you enable it (`--streetclip`).
+- **StreetCLIP** is **required and on by default** (a cross-check on every image);
+  its ~1.6 GB weights come down with `--download-models`. The tool won't analyse
+  until both models are present. Disable with `--no-streetclip` only if you know
+  what you're giving up.
 - `transformers` is pinned `<5` — GeoCLIP's encoder targets the 4.x CLIP API and
   5.x breaks inference.
 
@@ -178,7 +184,7 @@ Auto-detected; the tool degrades gracefully if they're missing.
 | `pip install` — core + flask + torch + geoclip + transformers | ~250 MB | ~4–6 min |
 | Tesseract binary (optional, OCR) | ~50 MB | ~1–2 min |
 | First **GeoCLIP** run — downloads CLIP-ViT-L/14 weights | ~1.7 GB | ~8–12 min |
-| *(opt-in)* First **StreetCLIP** run — 2nd model weights | ~1.6 GB | ~8–12 min |
+| First **StreetCLIP** run — 2nd model weights (required) | ~1.6 GB | ~8–12 min |
 
 **Total to first result ≈ 15–20 min**, dominated by the `torch` install and the
 one-time ~1.7 GB GeoCLIP download (figures assume ~30 Mbps). **Steady state with
@@ -358,14 +364,14 @@ a new signal means writing one function and slotting it in.
 |----------|--------|
 | `GEOSEER_API_KEY` | enables the GeoSeer AI locator (strong 3rd opinion; **free tier ~10 requests/day** — best on single important images, not big batches) |
 | `MAPILLARY_TOKEN` | prefers Mapillary for street matching (better coverage); without it, keyless KartaView is used |
-| `GEOLOCATOR_STREETCLIP` | set to `1` to enable the StreetCLIP second-model cross-check (~1.6 GB one-time download — see note below) |
+| `GEOLOCATOR_STREETCLIP` | StreetCLIP is **on by default**; set to `0` to disable the second-model cross-check |
 | `NO_COLOR` | disables ANSI colour in the terminal report |
 
 > **StreetCLIP note:** the cross-check loads `geolocal/StreetCLIP` (~1.6 GB,
-> CLIP-ViT-L/14). The **first run downloads the weights (~1.6 GB, one-time)**;
-> after that it's practical even on CPU (~27 s to load + ~3 s per image in
-> testing). It's **off by default** because of that large download and the
-> per-run load cost — but it measurably improves the hard cases.
+> CLIP-ViT-L/14, fetched by `--download-models`); after that it's practical even
+> on CPU (~27 s to load + ~3 s per image). It runs **by default** on every image
+> because it measurably improves the hard cases (it caught a photo GeoCLIP put in
+> Brazil and corrected it to India). Disable with `--no-streetclip` if you must.
 >
 > **What it does on disagreement.** When StreetCLIP's country differs from
 > GeoCLIP's guess, the tool resolves it in order: **(1) re-rank** — if any of

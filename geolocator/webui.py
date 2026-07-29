@@ -220,7 +220,7 @@ PAGE = """
 def _checks_from_form(form):
     if not form:  # GET: sensible defaults
         return {"use_ocr": True, "use_geoclip": True, "use_geoseer": True,
-                "use_streetclip": False, "use_street_match": True, "use_osm": True,
+                "use_streetclip": True, "use_street_match": True, "use_osm": True,
                 "use_inaturalist": True, "use_solar": True, "geoseer_only": False,
                 "full_workflow": False}
     keys = ("use_ocr", "use_geoclip", "use_geoseer", "use_streetclip",
@@ -281,6 +281,12 @@ def create_app():
 
     @app.route("/analyze", methods=["POST"])
     def do_analyze():
+        # Require the local models to be set up — no analysing on a crippled config.
+        ok, problems = modelmgr.preflight()
+        if not ok:
+            return render(form=request.form,
+                          error="Required local models aren't ready — download them "
+                                "in the Local models panel above: " + "; ".join(problems))
         file = request.files.get("image")
         if not file or not file.filename:
             return render(form=request.form, error="Please choose an image file.")

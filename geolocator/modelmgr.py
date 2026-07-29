@@ -82,6 +82,29 @@ def all_status() -> dict:
     return {m: status(m) for m in MODELS}
 
 
+# Local models that MUST be present before analysis is allowed. GeoSeer is a
+# separate optional API and is not part of this gate.
+REQUIRED_MODELS = ("geoclip", "streetclip")
+
+
+def preflight() -> tuple[bool, list[str]]:
+    """Check that every required local model is installed AND downloaded.
+
+    Returns (ok, problems). Used to refuse analysis until the tool is set up
+    properly, so results can't be judged on a crippled configuration.
+    """
+    problems: list[str] = []
+    for m in REQUIRED_MODELS:
+        s = status(m)
+        if not s["packages_installed"]:
+            problems.append(f"{s['label']}: Python packages missing — run `pip install .`")
+        elif not s["weights_cached"]:
+            problems.append(
+                f"{s['label']}: weights not downloaded (~{s['approx_gb']} GB)"
+            )
+    return (len(problems) == 0, problems)
+
+
 def _download_worker(model: str) -> None:
     repo = MODELS[model]["repo"]
     try:

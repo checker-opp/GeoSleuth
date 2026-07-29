@@ -497,7 +497,7 @@ def test_build_stages_default_includes_core():
     from geolocator.models import AnalyzeConfig
     names = [n for n, _ in pipeline._build_stages(AnalyzeConfig())]
     assert "landmark_model" in names and "geoseer" in names
-    assert "second_model" not in names   # StreetCLIP off by default
+    assert "second_model" in names   # StreetCLIP now ON by default (required setup)
 
 
 def test_build_stages_geoseer_only_skips_clip():
@@ -662,6 +662,27 @@ def test_modelmgr_status_shape():
     assert set(s.keys()) == {"geoclip", "streetclip"}
     for m in s.values():
         assert "state" in m and "percent" in m and "approx_gb" in m
+
+
+def test_streetclip_on_by_default():
+    from geolocator.models import AnalyzeConfig
+    assert AnalyzeConfig().use_streetclip is True
+    assert AnalyzeConfig.from_env().use_streetclip is True
+
+
+def test_preflight_shape():
+    from geolocator import modelmgr
+    ok, problems = modelmgr.preflight()
+    assert isinstance(ok, bool) and isinstance(problems, list)
+    assert modelmgr.REQUIRED_MODELS == ("geoclip", "streetclip")
+
+
+def test_cli_skip_model_check_flag():
+    from geolocator import cli
+    args = cli.build_parser().parse_args(["x.jpg", "--skip-model-check"])
+    assert args.skip_model_check is True
+    args2 = cli.build_parser().parse_args(["--download-models"])
+    assert args2.download_models is True and args2.images == []
 
 
 # --- extractor safety ------------------------------------------------------ #
