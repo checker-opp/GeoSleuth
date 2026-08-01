@@ -649,6 +649,50 @@ def test_geoseer_sets_short_circuit_when_confident(monkeypatch):
     assert r2.meta.get("skip_heavy_models") is not True
 
 
+# --- SerpAPI reverse image search ------------------------------------------ #
+def test_reverse_search_on_by_default():
+    from geolocator.models import AnalyzeConfig
+    assert AnalyzeConfig().use_reverse_search is True
+
+
+def test_reverse_search_api_no_key(monkeypatch):
+    from geolocator import reverse_search_api as rs
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+    assert rs.api_key_configured() is False
+    res = rs.search("x.jpg")
+    assert res.available is False and "SERPAPI_API_KEY" in res.reason
+
+
+def test_reverse_stage_without_key_only_pivots(monkeypatch):
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+    r = GeoResult(image_path="x.jpg")
+    pipeline.stage_reverse_image_search(r)
+    assert r.meta.get("pivots")                       # pivots always present
+    assert not any(s.source == "reverse_image" for s in r.signals)  # no API call
+
+
+def test_reverse_extract_picks_agreeing_location(monkeypatch):
+    from geolocator import geocode as geocode_mod
+    from geolocator.geocode import SearchHit
+    from geolocator.reverse_search_api import LensMatch
+    # Two titles geocode to Delhi, one to Paris -> Delhi wins on agreement.
+    def fake_search(q, **k):
+        ql = q.lower()
+        if "delhi" in ql or "chandni" in ql:
+            return [SearchHit("Chandni Chowk, Delhi, India", 28.65, 77.23, importance=0.5)]
+        if "paris" in ql:
+            return [SearchHit("Paris, France", 48.85, 2.35, importance=0.6)]
+        return []
+    monkeypatch.setattr(geocode_mod, "search", fake_search)
+    matches = [LensMatch("Chandni Chowk, Old Delhi, India"),
+               LensMatch("Delhi street market"),
+               LensMatch("Paris cafe")]
+    out = pipeline._reverse_extract(matches)
+    assert out is not None
+    coords, place, agree = out
+    assert "Delhi" in place and agree == 2
+
+
 # --- model manager --------------------------------------------------------- #
 def test_modelmgr_unknown_model():
     from geolocator import modelmgr

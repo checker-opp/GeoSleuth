@@ -6,9 +6,10 @@ a **confidence score**, and the **evidence trail** that produced it — never a
 bare guess. *(The Python package and CLI are named `geolocator` / `geolocate`.)*
 
 > **Status:** working end to end — EXIF & geocoding, OCR, the **GeoCLIP** and
-> **GeoSeer** locators with a **StreetCLIP** cross-check, corroboration layers
-> (OSM · iNaturalist · solar/climate · street imagery), a **web UI**, and 64
-> offline tests. See [what it does](#what-it-does-today) and the [Roadmap](#roadmap).
+> **GeoSeer** locators with a **StreetCLIP** cross-check, automated **reverse
+> image search** (SerpAPI), corroboration layers (OSM · iNaturalist ·
+> solar/climate · street imagery), a **web UI**, and 71 offline tests. See
+> [what it does](#what-it-does-today) and the [Roadmap](#roadmap).
 
 ---
 
@@ -121,7 +122,8 @@ Every result ships with its **confidence** and **evidence trail** — never a ba
 | **iNaturalist** | Species actually observed near the candidate — corroborates the biome | corroboration (keyless) |
 | **Solar / climate** | Timezone↔longitude consistency, sun elevation, climate zone | corroboration / sanity check |
 | **Street match** (Mapillary / KartaView) | Nearby street-level imagery to visually confirm the guess | pivot / corroboration |
-| **Reverse-search pivots** | Ready-to-open Yandex/Lens/Bing/TinEye upload links | manual next step |
+| **Reverse image search** (SerpAPI) | Automated Google Lens — finds the source page whose title names the place; the strongest signal for web-sourced photos | ★★★★ when the image is online (needs key) |
+| **Reverse-search pivots** | Ready-to-open Yandex/Lens/Bing/TinEye upload links (keyless, manual) | manual next step |
 
 The pipeline runs stages in priority order (cheap & deterministic first):
 
@@ -357,7 +359,7 @@ judged on a half-configured setup.
 |------|------------------------|-----------|
 | **GeoSeer AI locator** | strong AI geolocation, needs a free API key (~10/day) | set `GEOSEER_API_KEY` (from [geoseeer.com](https://geoseeer.com)); becomes the primary locator when confident |
 | **Mapillary street matching** | better global coverage, needs a free API token | set `MAPILLARY_TOKEN` (see [dashboard](https://www.mapillary.com/dashboard/developers)); without it, street matching still works via keyless **KartaView** (sparser outside Europe) |
-| **Automated reverse image search** | Yandex/Lens fight scraping; TinEye API is paid. We do **not** scrape or bypass CAPTCHAs | use the printed pivot links to search manually, or add a keyed TinEye/Bing client later |
+| **Automated reverse image search** | now available via **SerpAPI** (Google Lens) — legitimate, no scraping | set `SERPAPI_API_KEY` (free ~100/mo). Note: it briefly uploads the image to a temporary public host so Lens can fetch it. Without a key, the manual pivot links still work |
 | **Flora → region from the image** | needs a plant-ID vision model | iNaturalist is wired in the *other* direction (candidate coordinate → nearby species, as biome corroboration) |
 | **Shadow-angle → latitude** | needs CV shadow detection in the image | Phase 3 currently does the metadata-side solar check instead |
 
@@ -371,6 +373,7 @@ a new signal means writing one function and slotting it in.
 | Variable | Effect |
 |----------|--------|
 | `GEOSEER_API_KEY` | enables the GeoSeer AI locator (strong 3rd opinion; **free tier ~10 requests/day** — best on single important images, not big batches) |
+| `SERPAPI_API_KEY` | enables **automated reverse image search** (Google Lens; free ~100/mo) — the strongest signal for photos taken from the public web. Briefly uploads the image to a temporary public host so Lens can fetch it |
 | `MAPILLARY_TOKEN` | prefers Mapillary for street matching (better coverage); without it, keyless KartaView is used |
 | `GEOLOCATOR_STREETCLIP` | StreetCLIP is **on by default**; set to `0` to disable the second-model cross-check |
 | `NO_COLOR` | disables ANSI colour in the terminal report |
@@ -416,13 +419,14 @@ geolocator/
   inaturalist.py    iNaturalist nearby-species biome corroboration (keyless)
   # Phase 4 — best-effort external
   plates.py         license-plate format → country hint
-  reverse_search.py reverse-image-search pivot links
+  reverse_search.py reverse-image-search pivot links (keyless, manual)
+  reverse_search_api.py automated Google Lens via SerpAPI (opt-in key)
   street_match.py   Mapillary (token) + KartaView (keyless) street imagery
   # UI + config
   webui.py          Flask browser app (keys, toggles, in-UI model downloads)
   modelmgr.py       local-model status + download-with-progress
 tests/
-  test_pipeline.py  64 offline tests (no network / binaries needed)
+  test_pipeline.py  71 offline tests (no network / binaries needed)
 COVERAGE.md         spec → implementation traceability (what shipped / substituted / skipped)
 ```
 

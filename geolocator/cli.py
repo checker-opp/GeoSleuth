@@ -227,6 +227,8 @@ def build_parser() -> argparse.ArgumentParser:
     keys = p.add_argument_group("API keys (override environment variables)")
     keys.add_argument("--geoseer-key", metavar="KEY", help="GeoSeer API key")
     keys.add_argument("--mapillary-token", metavar="TOKEN", help="Mapillary access token")
+    keys.add_argument("--serpapi-key", metavar="KEY",
+                      help="SerpAPI key (enables automated reverse image search)")
 
     setup = p.add_argument_group("setup")
     setup.add_argument("--download-models", action="store_true",
@@ -294,6 +296,8 @@ def _config_from_args(args) -> AnalyzeConfig:
         cfg.geoseer_key = args.geoseer_key
     if args.mapillary_token:
         cfg.mapillary_token = args.mapillary_token
+    if args.serpapi_key:
+        cfg.serpapi_key = args.serpapi_key
     return cfg
 
 

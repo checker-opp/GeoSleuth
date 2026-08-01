@@ -137,6 +137,7 @@ class AnalyzeConfig:
     use_geoseer: bool = True          # AI API; self-skips if no key is available
     use_streetclip: bool = True       # 2nd model — ON by default (required setup)
     use_place_lookup: bool = True
+    use_reverse_search: bool = True   # SerpAPI Google Lens; self-skips without a key
     use_street_match: bool = True
     use_osm: bool = True
     use_inaturalist: bool = True
@@ -148,6 +149,7 @@ class AnalyzeConfig:
 
     geoseer_key: Optional[str] = None       # overrides GEOSEER_API_KEY
     mapillary_token: Optional[str] = None   # overrides MAPILLARY_TOKEN
+    serpapi_key: Optional[str] = None       # overrides SERPAPI_API_KEY
 
     @classmethod
     def from_env(cls) -> "AnalyzeConfig":

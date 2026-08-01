@@ -25,6 +25,7 @@ from . import ocr as ocr_mod
 from . import osm as osm_mod
 from . import plates as plates_mod
 from . import reverse_search as reverse_search_mod
+from . import reverse_search_api as reverse_search_api_mod
 from . import secondmodel as secondmodel_mod
 from . import solar as solar_mod
 from . import street_match as street_match_mod
@@ -200,16 +201,103 @@ def _snippet(text: str, limit: int = 240) -> str:
 # --------------------------------------------------------------------------- #
 # Placeholder stages (later phases) — declared so ordering is explicit.
 # --------------------------------------------------------------------------- #
-def stage_reverse_image_search(result: GeoResult) -> None:  # Phase 4
-    """Attach manual reverse-image-search pivot links (no scraping / no keys).
+import re as _re
 
-    These are actionable next-steps, not location evidence, so they're stored in
-    ``result.meta`` and rendered separately rather than as a signal.
+
+def _reverse_extract(matches) -> Optional[tuple]:
+    """From Lens match titles, geocode candidates and return the best-agreed
+    location as (Coordinates, place, agree_count), or None."""
+    def clean(t: str) -> str:
+        t = _re.sub(r"^File:", "", t)
+        t = _re.sub(r"\.(jpg|jpeg|png|webp).*$", "", t, flags=_re.I)
+        t = _re.sub(r"\s*[-|–]\s*\S.{0,25}$", "", t)  # trailing " - Source"
+        return t.strip()
+
+    seen: set = set()
+    hits = []
+    for m in matches[:12]:
+        c = clean(m.title)
+        if len(c) < 4 or c.lower() in seen:
+            continue
+        seen.add(c.lower())
+        found = geocode_mod.search(c, limit=1)
+        if found:
+            hits.append(found[0])
+        if len(hits) >= 6:
+            break
+    if not hits:
+        return None
+    # Pick the hit with the most neighbours within ~75 km (agreement), tie-broken
+    # by Nominatim importance.
+    best, best_agree, best_imp = None, -1, -1.0
+    for h in hits:
+        agree = sum(
+            1 for o in hits
+            if geoestimate_mod._haversine_km(Coordinates(h.lat, h.lon),
+                                             Coordinates(o.lat, o.lon)) <= 75
+        )
+        if (agree, h.importance) > (best_agree, best_imp):
+            best, best_agree, best_imp = h, agree, h.importance
+    return (Coordinates(best.lat, best.lon), best.display_name, best_agree)
+
+
+def stage_reverse_image_search(result: GeoResult) -> None:  # Phase 4
+    """Automated reverse image search (SerpAPI Google Lens) + manual pivot links.
+
+    For web-sourced photos this is often the single strongest signal — it finds
+    the page the image appears on, whose title usually names the place. Needs a
+    SerpAPI key; without one it just attaches the manual pivot links.
     """
-    pivots = reverse_search_mod.build_pivots()
+    # Manual pivot links are always available (no key, no scraping).
     result.meta["pivots"] = [
-        {"engine": p.engine, "url": p.url, "note": p.note} for p in pivots
+        {"engine": p.engine, "url": p.url, "note": p.note}
+        for p in reverse_search_mod.build_pivots()
     ]
+
+    key = result.meta.get("serpapi_key")
+    cfg = result.meta.get("config")
+    if not key or (cfg is not None and not getattr(cfg, "use_reverse_search", True)):
+        return
+    if any(s.precision == Precision.EXACT for s in result.signals):
+        return  # already have an exact GPS fix
+
+    res = reverse_search_api_mod.search(result.image_path, api_key=key)
+    if not res.available:
+        result.note(f"Reverse image search skipped: {res.reason}")
+        return
+    if not res.matches:
+        result.note("Reverse image search ran but found no visual matches.")
+        return
+
+    extracted = _reverse_extract(res.matches)
+    top_titles = [m.title for m in res.matches[:4]]
+    if extracted is None:
+        result.note("Reverse image search found matches but couldn't extract a "
+                    "location — inspect them: " + " | ".join(top_titles))
+        return
+
+    coords, place, agree = extracted
+    # Finding the source is strong evidence; more agreeing matches = more trust.
+    confidence = min(0.78, 0.45 + 0.1 * agree)
+    result.add(
+        Signal(
+            source="reverse_image",
+            description=f"Reverse image search matched '{place}' "
+            f"({agree} agreeing web match(es))",
+            confidence=confidence,
+            precision=Precision.CITY,
+            coordinates=coords,
+            place=place,
+            corroborating=True,
+            evidence={"matches": top_titles, "agree": agree},
+        )
+    )
+    # A solid reverse-search hit is definitive — skip the slow local models.
+    short = getattr(cfg, "short_circuit_on_geoseer", True) if cfg else True
+    if short and agree >= 2:
+        result.meta["skip_heavy_models"] = True
+        result.note("Reverse image search located the source — skipping GeoSeer "
+                    "and the local models.")
 
 
 def stage_landmark_model(result: GeoResult) -> None:  # Phase 2 (GeoCLIP)
@@ -281,6 +369,8 @@ def stage_geoseer(result: GeoResult) -> None:  # AI geolocation API (3rd locator
     aggregation, so a confident GeoSeer result naturally wins over a weaker
     GeoCLIP guess and corroborates an agreeing one.
     """
+    if result.meta.get("skip_heavy_models"):
+        return  # reverse image search already located it
     key = result.meta.get("geoseer_key")
     if not key:
         return
@@ -898,6 +988,9 @@ def analyze(image_path: str, config: Optional[AnalyzeConfig] = None) -> GeoResul
     mt = config.mapillary_token or os.environ.get(street_match_mod.TOKEN_ENV)
     if mt:
         result.meta["mapillary_token"] = mt
+    sk = config.serpapi_key or os.environ.get(reverse_search_api_mod.SERPAPI_KEY_ENV)
+    if sk:
+        result.meta["serpapi_key"] = sk
 
     for _name, stage in _build_stages(config):
         stage(result)

@@ -90,6 +90,9 @@ PAGE = """
       <div><label>Mapillary token <span class="muted">(optional)</span></label>
         <input type="password" name="mapillary_token" value="{{ keys.mapillary_token }}" placeholder="MLY|..."></div>
     </div>
+    <label>SerpAPI key <span class="muted">(optional — automated reverse image search, ~100/mo)</span></label>
+    <input type="password" name="serpapi_key" value="{{ keys.serpapi_key }}" placeholder="serpapi key">
+    <div class="muted" style="margin-top:4px">Note: enabling this briefly uploads the image to a temporary public host so Google Lens can fetch it.</div>
 
     <fieldset><legend>Signals to run</legend>
       <label style="color:#e6edf3"><input type="checkbox" name="geoseer_only" id="geoseer_only" {% if checks.geoseer_only %}checked{% endif %}>
@@ -243,6 +246,7 @@ def _config_from_form(form) -> AnalyzeConfig:
         short_circuit_on_geoseer=("full_workflow" not in form),
         geoseer_key=(form.get("geoseer_key") or "").strip() or None,
         mapillary_token=(form.get("mapillary_token") or "").strip() or None,
+        serpapi_key=(form.get("serpapi_key") or "").strip() or None,
     )
 
 
@@ -259,7 +263,8 @@ def create_app():
     def render(result=None, form=None, error=None):
         checks = _checks_from_form(form)
         keys = {"geoseer_key": (form.get("geoseer_key", "") if form else ""),
-                "mapillary_token": (form.get("mapillary_token", "") if form else "")}
+                "mapillary_token": (form.get("mapillary_token", "") if form else ""),
+                "serpapi_key": (form.get("serpapi_key", "") if form else "")}
         prec_label = _PRECISION_LABEL.get(
             result["best_guess"]["precision"], "") if result else ""
         conf_color = _conf_color(result["best_guess"]["confidence"]) if result else "#2ea043"
